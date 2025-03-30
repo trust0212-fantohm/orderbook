@@ -1,0 +1,288 @@
+{
+  "manifestVersion": "3.2",
+  "admin": {
+    "address": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+    "txHash": "0x98ef5ea4c2b52db4808ede2b459561fbfab72f93814f3e4df8d58f6892b715ce"
+  },
+  "proxies": [
+    {
+      "address": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+      "txHash": "0x54bebe8e217376a4ad0b52a1eb2bf460f19694633c3e3b61b7f54b1db54695e0",
+      "kind": "transparent"
+    }
+  ],
+  "impls": {
+    "afe225ba3b4dbbfaadfc7e2f0a3ae8fa3073e79f5481635c7cb08c5ca7a06dc4": {
+      "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+      "txHash": "0xff88ead90e0d8abfe3211e6830b0ca880bd52379743d24ff60129b03e8da6ce5",
+      "layout": {
+        "solcVersion": "0.8.18",
+        "storage": [
+          {
+            "label": "_initialized",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint8",
+            "contract": "Initializable",
+            "src": "@openzeppelin\\contracts-upgradeable\\proxy\\utils\\Initializable.sol:63",
+            "retypedFrom": "bool"
+          },
+          {
+            "label": "_initializing",
+            "offset": 1,
+            "slot": "0",
+            "type": "t_bool",
+            "contract": "Initializable",
+            "src": "@openzeppelin\\contracts-upgradeable\\proxy\\utils\\Initializable.sol:68"
+          },
+          {
+            "label": "__gap",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_array(t_uint256)50_storage",
+            "contract": "ContextUpgradeable",
+            "src": "@openzeppelin\\contracts-upgradeable\\utils\\ContextUpgradeable.sol:36"
+          },
+          {
+            "label": "_owner",
+            "offset": 0,
+            "slot": "51",
+            "type": "t_address",
+            "contract": "OwnableUpgradeable",
+            "src": "@openzeppelin\\contracts-upgradeable\\access\\OwnableUpgradeable.sol:22"
+          },
+          {
+            "label": "__gap",
+            "offset": 0,
+            "slot": "52",
+            "type": "t_array(t_uint256)49_storage",
+            "contract": "OwnableUpgradeable",
+            "src": "@openzeppelin\\contracts-upgradeable\\access\\OwnableUpgradeable.sol:94"
+          },
+          {
+            "label": "_status",
+            "offset": 0,
+            "slot": "101",
+            "type": "t_uint256",
+            "contract": "ReentrancyGuardUpgradeable",
+            "src": "@openzeppelin\\contracts-upgradeable\\security\\ReentrancyGuardUpgradeable.sol:38"
+          },
+          {
+            "label": "__gap",
+            "offset": 0,
+            "slot": "102",
+            "type": "t_array(t_uint256)49_storage",
+            "contract": "ReentrancyGuardUpgradeable",
+            "src": "@openzeppelin\\contracts-upgradeable\\security\\ReentrancyGuardUpgradeable.sol:88"
+          },
+          {
+            "label": "activeBuyOrders",
+            "offset": 0,
+            "slot": "151",
+            "type": "t_array(t_struct(Order)5217_storage)dyn_storage",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:18"
+          },
+          {
+            "label": "activeSellOrders",
+            "offset": 0,
+            "slot": "152",
+            "type": "t_array(t_struct(Order)5217_storage)dyn_storage",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:19"
+          },
+          {
+            "label": "fullfilledOrders",
+            "offset": 0,
+            "slot": "153",
+            "type": "t_array(t_struct(Order)5217_storage)dyn_storage",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:20"
+          },
+          {
+            "label": "tokenAddress",
+            "offset": 0,
+            "slot": "154",
+            "type": "t_address",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:22"
+          },
+          {
+            "label": "nonce",
+            "offset": 0,
+            "slot": "155",
+            "type": "t_uint256",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:24"
+          },
+          {
+            "label": "buyFeeBips",
+            "offset": 0,
+            "slot": "156",
+            "type": "t_uint256",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:26"
+          },
+          {
+            "label": "sellFeeBips",
+            "offset": 0,
+            "slot": "157",
+            "type": "t_uint256",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:27"
+          },
+          {
+            "label": "treasury",
+            "offset": 0,
+            "slot": "158",
+            "type": "t_address",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:30"
+          },
+          {
+            "label": "oracle",
+            "offset": 0,
+            "slot": "159",
+            "type": "t_address",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:31"
+          },
+          {
+            "label": "OrderCountByUser",
+            "offset": 0,
+            "slot": "160",
+            "type": "t_mapping(t_address,t_uint256)",
+            "contract": "OrderBook",
+            "src": "contracts\\OrderBook.sol:33"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_array(t_struct(Order)5217_storage)dyn_storage": {
+            "label": "struct IOrderBook.Order[]",
+            "numberOfBytes": "32"
+          },
+          "t_array(t_uint256)49_storage": {
+            "label": "uint256[49]",
+            "numberOfBytes": "1568"
+          },
+          "t_array(t_uint256)50_storage": {
+            "label": "uint256[50]",
+            "numberOfBytes": "1600"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_enum(OrderType)5189": {
+            "label": "enum IOrderBook.OrderType",
+            "members": [
+              "BUY",
+              "SELL"
+            ],
+            "numberOfBytes": "1"
+          },
+          "t_mapping(t_address,t_uint256)": {
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32"
+          },
+          "t_struct(Order)5217_storage": {
+            "label": "struct IOrderBook.Order",
+            "members": [
+              {
+                "label": "id",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "trader",
+                "type": "t_address",
+                "offset": 0,
+                "slot": "1"
+              },
+              {
+                "label": "orderType",
+                "type": "t_enum(OrderType)5189",
+                "offset": 20,
+                "slot": "1"
+              },
+              {
+                "label": "desiredPrice",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "2"
+              },
+              {
+                "label": "quantity",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "3"
+              },
+              {
+                "label": "remainQuantity",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "4"
+              },
+              {
+                "label": "maticValue",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "5"
+              },
+              {
+                "label": "remainMaticValue",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "6"
+              },
+              {
+                "label": "isFilled",
+                "type": "t_bool",
+                "offset": 0,
+                "slot": "7"
+              },
+              {
+                "label": "isMarketOrder",
+                "type": "t_bool",
+                "offset": 1,
+                "slot": "7"
+              },
+              {
+                "label": "isCanceled",
+                "type": "t_bool",
+                "offset": 2,
+                "slot": "7"
+              },
+              {
+                "label": "timeInForce",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "8"
+              },
+              {
+                "label": "lastTradeTimestamp",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "9"
+              }
+            ],
+            "numberOfBytes": "320"
+          },
+          "t_uint256": {
+            "label": "uint256",
+            "numberOfBytes": "32"
+          },
+          "t_uint8": {
+            "label": "uint8",
+            "numberOfBytes": "1"
+          }
+        }
+      }
+    }
+  }
+}
