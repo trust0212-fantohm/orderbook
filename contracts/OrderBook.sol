@@ -77,8 +77,7 @@ contract OrderBook is
 
         require(activeSellOrders.length > 0, "No active sell orders");
 
-        uint256 totalVolume = msg.value;
-        distributeVolumeByPrice(totalVolume, OrderType.SELL);
+        distributeVolumeByPrice(msg.value, OrderType.SELL);
         OrderCountByUser[msg.sender]++;
     }
 
@@ -115,8 +114,7 @@ contract OrderBook is
 
         require(activeBuyOrders.length > 0, "No active buy orders");
 
-        uint256 totalVolume = marketOrder.remainQuantity;
-        distributeVolumeByPrice(totalVolume, OrderType.BUY);
+        distributeVolumeByPrice(marketOrder.remainQuantity, OrderType.BUY);
         OrderCountByUser[msg.sender]++;
     }
 
@@ -316,6 +314,7 @@ contract OrderBook is
      */
     function executeLimitOrders() public nonReentrant {
         cleanLimitOrders();
+
         require(
             activeBuyOrders.length > 0 && activeSellOrders.length > 0,
             "No active limit orders"
@@ -346,16 +345,8 @@ contract OrderBook is
             priceToMatch = sellOrder.desiredPrice;
 
             // Distribute volume for both buy and sell orders at this price
-            distributeVolumeByPrice(
-                activeBuyOrders,
-                remainingQuantity,
-                OrderType.BUY
-            );
-            distributeVolumeByPrice(
-                activeSellOrders,
-                remainingQuantity,
-                OrderType.SELL
-            );
+            distributeVolumeByPrice(remainingQuantity, OrderType.BUY);
+            distributeVolumeByPrice(remainingQuantity, OrderType.SELL);
         }
     }
 
@@ -418,6 +409,7 @@ contract OrderBook is
         if (activeBuyOrders.length > 0 && activeSellOrders.length > 0) {
             executeLimitOrders();
         }
+
         OrderCountByUser[msg.sender]++;
     }
 
@@ -426,6 +418,7 @@ contract OrderBook is
         uint256 i = activeBuyOrders.length;
 
         activeBuyOrders.push(newLimitBuyOrder);
+
         while (
             i > 0 &&
             activeBuyOrders[i - 1].desiredPrice > newLimitBuyOrder.desiredPrice
