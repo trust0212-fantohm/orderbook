@@ -6,9 +6,7 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-
 import {IOrderBook} from "./interfaces/IOrderBook.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 
@@ -24,14 +22,13 @@ contract OrderBook is
     Order[] public activeSellOrders;
     Order[] public fullfilledOrders;
 
-    address public tokenAddress;
-
     uint256 public nonce;
     uint256 private constant BASE_BIPS = 10000;
     uint256 public buyFeeBips;
     uint256 public sellFeeBips;
-    // Price decimals. We set price wei unit. so 1 $ACME = 0.01 $Matic means price = 10 ** 16.
     uint256 private constant price_decimals = 18;
+
+    address public tokenAddress;
     address public treasury;
     address public oracle; // matic-usd price oracle
 
@@ -81,7 +78,7 @@ contract OrderBook is
         require(activeSellOrders.length > 0, "No active sell orders");
 
         uint256 totalVolume = marketOrder.remainMaticValue;
-        distributeVolume(activeSellOrders, totalVolume, OrderType.SELL);
+        distributeVolumeByPrice(activeSellOrders, totalVolume, OrderType.SELL);
         OrderCountByUser[msg.sender]++;
     }
 
@@ -119,7 +116,7 @@ contract OrderBook is
         require(activeBuyOrders.length > 0, "No active buy orders");
 
         uint256 totalVolume = marketOrder.remainQuantity;
-        distributeVolume(activeBuyOrders, totalVolume, OrderType.BUY);
+        distributeVolumeByPrice(activeBuyOrders, totalVolume, OrderType.BUY);
         OrderCountByUser[msg.sender]++;
     }
 
@@ -142,40 +139,128 @@ contract OrderBook is
     }
 
     /**
-     * @dev Distribute volume proportionally across orders with the same price
+     * @dev Distribute volume across orders with different prices and handle transfers.
+     * Processes orders price-by-price until the volume is fully allocated.
      */
-    function distributeVolume(
+    function distributeVolumeByPrice(
         Order[] storage orders,
         uint256 volume,
         OrderType orderType
     ) internal {
-        uint256 price = orders[orders.length - 1].desiredPrice;
-        (uint256[] memory weights, uint256 totalWeight) = getOrderWeights(
-            orders,
-            price
-        );
+        uint256 remainingVolume = volume;
 
-        for (uint256 i = 0; i < orders.length; i++) {
-            if (orders[i].desiredPrice == price && weights[i] > 0) {
-                uint256 allocatedVolume = (volume * weights[i]) / totalWeight;
+        // Iterate through orders from the lowest price (for BUY) or highest price (for SELL)
+        for (uint256 i = orders.length; i > 0; i--) {
+            Order storage order = orders[i - 1];
+            uint256 price = order.desiredPrice;
 
-                if (allocatedVolume >= orders[i].remainQuantity) {
-                    uint256 orderAmount = orders[i].remainQuantity;
-                    volume -= orderAmount;
-                    orders[i].remainQuantity = 0;
-                    orders[i].isFilled = true;
-                    orders[i].lastTradeTimestamp = block.timestamp;
-                    removeOrder(orders, i);
-                } else {
-                    orders[i].remainQuantity -= allocatedVolume;
-                    orders[i].lastTradeTimestamp = block.timestamp;
-                    volume -= allocatedVolume;
+            // Get weights for all orders at the current price
+            (uint256[] memory weights, uint256 totalWeight) = getOrderWeights(
+                orders,
+                price
+            );
+
+            // Distribute volume among orders with the same price
+            uint256 priceVolume = remainingVolume;
+
+            for (uint256 j = 0; j < orders.length; j++) {
+                Order storage o = orders[j];
+                if (o.desiredPrice != price || remainingVolume == 0) {
+                    continue;
                 }
 
-                if (volume == 0) {
+                uint256 allocatedVolume = (priceVolume * weights[j]) /
+                    totalWeight;
+
+                if (allocatedVolume >= o.remainQuantity) {
+                    uint256 orderAmount = o.remainQuantity;
+                    remainingVolume -= orderAmount;
+                    o.remainQuantity = 0;
+                    o.isFilled = true;
+                    o.lastTradeTimestamp = block.timestamp;
+
+                    // Transfer MATIC or tokens based on orderType
+                    handleTrade(orderType, o, orderAmount);
+
+                    // Remove fully filled orders
+                    removeOrder(orders, j);
+                } else {
+                    o.remainQuantity -= allocatedVolume;
+                    o.lastTradeTimestamp = block.timestamp;
+                    remainingVolume -= allocatedVolume;
+
+                    // Transfer MATIC or tokens based on orderType
+                    handleTrade(orderType, o, allocatedVolume);
+                }
+
+                if (remainingVolume == 0) {
                     break;
                 }
             }
+
+            if (remainingVolume == 0) {
+                break;
+            }
+        }
+
+        require(
+            remainingVolume == 0,
+            "Insufficient token supply to fulfill order"
+        );
+    }
+
+    /**
+     * @dev Handle transfer of MATIC and tokens between buyer, seller, and treasury.
+     */
+    function handleTrade(
+        OrderType orderType,
+        Order storage order,
+        uint256 allocatedVolume
+    ) internal {
+        if (orderType == OrderType.BUY) {
+            // Send MATIC to the seller and deduct fee
+            (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
+                allocatedVolume,
+                OrderType.SELL
+            );
+            payable(order.trader).transfer(realAmount);
+            payable(treasury).transfer(feeAmount);
+
+            // Send tokens to the buyer
+            (uint256 tokenAmount, uint256 tokenFeeAmount) = getAmountDeductFee(
+                allocatedVolume,
+                OrderType.BUY
+            );
+            IERC20Upgradeable(tokenAddress).safeTransfer(
+                msg.sender,
+                tokenAmount
+            );
+            IERC20Upgradeable(tokenAddress).safeTransfer(
+                treasury,
+                tokenFeeAmount
+            );
+        } else if (orderType == OrderType.SELL) {
+            // Send tokens to the buyer and deduct fee
+            (uint256 tokenAmount, uint256 tokenFeeAmount) = getAmountDeductFee(
+                allocatedVolume,
+                OrderType.BUY
+            );
+            IERC20Upgradeable(tokenAddress).safeTransfer(
+                order.trader,
+                tokenAmount
+            );
+            IERC20Upgradeable(tokenAddress).safeTransfer(
+                treasury,
+                tokenFeeAmount
+            );
+
+            // Send MATIC to the seller
+            (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
+                allocatedVolume,
+                OrderType.SELL
+            );
+            payable(msg.sender).transfer(realAmount);
+            payable(treasury).transfer(feeAmount);
         }
     }
 
@@ -222,17 +307,41 @@ contract OrderBook is
             "No active limit orders"
         );
 
-        Order storage buyOrder = activeBuyOrders[activeBuyOrders.length - 1];
-        Order storage sellOrder = activeSellOrders[activeSellOrders.length - 1];
+        uint256 remainingQuantity;
+        uint256 priceToMatch;
 
-        if (buyOrder.desiredPrice >= sellOrder.desiredPrice) {
-            uint256 tokenAmount = buyOrder.remainQuantity >=
+        while (
+            activeBuyOrders.length > 0 &&
+            activeSellOrders.length > 0 &&
+            activeBuyOrders[activeBuyOrders.length - 1].desiredPrice >=
+            activeSellOrders[activeSellOrders.length - 1].desiredPrice
+        ) {
+            Order storage buyOrder = activeBuyOrders[
+                activeBuyOrders.length - 1
+            ];
+            Order storage sellOrder = activeSellOrders[
+                activeSellOrders.length - 1
+            ];
+
+            // Determine the volume that can be matched
+            remainingQuantity = buyOrder.remainQuantity >=
                 sellOrder.remainQuantity
                 ? sellOrder.remainQuantity
                 : buyOrder.remainQuantity;
 
-            distributeVolume(activeBuyOrders, tokenAmount, OrderType.BUY);
-            distributeVolume(activeSellOrders, tokenAmount, OrderType.SELL);
+            priceToMatch = sellOrder.desiredPrice;
+
+            // Distribute volume for both buy and sell orders at this price
+            distributeVolumeByPrice(
+                activeBuyOrders,
+                remainingQuantity,
+                OrderType.BUY
+            );
+            distributeVolumeByPrice(
+                activeSellOrders,
+                remainingQuantity,
+                OrderType.SELL
+            );
         }
     }
 
