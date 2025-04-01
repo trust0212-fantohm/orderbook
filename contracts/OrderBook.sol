@@ -77,8 +77,8 @@ contract OrderBook is
 
         require(activeSellOrders.length > 0, "No active sell orders");
 
-        uint256 totalVolume = marketOrder.remainMaticValue;
-        distributeVolumeByPrice(activeSellOrders, totalVolume, OrderType.SELL);
+        uint256 totalVolume = msg.value;
+        distributeVolumeByPrice(totalVolume, OrderType.SELL);
         OrderCountByUser[msg.sender]++;
     }
 
@@ -116,7 +116,7 @@ contract OrderBook is
         require(activeBuyOrders.length > 0, "No active buy orders");
 
         uint256 totalVolume = marketOrder.remainQuantity;
-        distributeVolumeByPrice(activeBuyOrders, totalVolume, OrderType.BUY);
+        distributeVolumeByPrice(totalVolume, OrderType.BUY);
         OrderCountByUser[msg.sender]++;
     }
 
@@ -143,70 +143,87 @@ contract OrderBook is
      * Processes orders price-by-price until the volume is fully allocated.
      */
     function distributeVolumeByPrice(
-        Order[] storage orders,
-        uint256 volume,
+        uint256 volume, // either MATIC (for buy market order) or token amount (for sell market order)
         OrderType orderType
     ) internal {
+        Order[] storage orders = orderType == OrderType.BUY
+            ? activeSellOrders
+            : activeBuyOrders;
+
         uint256 remainingVolume = volume;
 
-        // Iterate through orders from the lowest price (for BUY) or highest price (for SELL)
+        // Iterate from the end (lowest price for sell, highest for buy)
         for (uint256 i = orders.length; i > 0; i--) {
-            Order storage order = orders[i - 1];
-            uint256 price = order.desiredPrice;
+            Order storage referenceOrder = orders[i - 1];
+            uint256 price = referenceOrder.desiredPrice;
 
-            // Get weights for all orders at the current price
             (uint256[] memory weights, uint256 totalWeight) = getOrderWeights(
                 orders,
                 price
             );
 
-            // Distribute volume among orders with the same price
-            uint256 priceVolume = remainingVolume;
-
             for (uint256 j = 0; j < orders.length; j++) {
                 Order storage o = orders[j];
-                if (o.desiredPrice != price || remainingVolume == 0) {
-                    continue;
-                }
+                if (o.desiredPrice != price || remainingVolume == 0) continue;
 
-                uint256 allocatedVolume = (priceVolume * weights[j]) /
-                    totalWeight;
+                uint256 weightedVolume = (volume * weights[j]) / totalWeight;
 
-                if (allocatedVolume >= o.remainQuantity) {
-                    uint256 orderAmount = o.remainQuantity;
-                    remainingVolume -= orderAmount;
-                    o.remainQuantity = 0;
-                    o.isFilled = true;
-                    o.lastTradeTimestamp = block.timestamp;
+                if (orderType == OrderType.BUY) {
+                    // Buyer is sending MATIC, we convert it to token quantity for comparison
+                    uint256 tokenAmount = (weightedVolume *
+                        10 ** price_decimals) / o.desiredPrice;
 
-                    // Transfer MATIC or tokens based on orderType
-                    handleTrade(orderType, o, orderAmount);
+                    if (tokenAmount >= o.remainQuantity) {
+                        // Full fill
+                        uint256 maticToPay = (o.remainQuantity *
+                            o.desiredPrice) / 10 ** price_decimals;
+                        handleTrade(orderType, o, maticToPay);
+                        remainingVolume -= maticToPay;
 
-                    // Remove fully filled orders
-                    removeOrder(orders, j);
+                        o.remainQuantity = 0;
+                        o.isFilled = true;
+                        o.lastTradeTimestamp = block.timestamp;
+
+                        removeOrder(orders, j);
+                    } else {
+                        // Partial fill
+                        uint256 maticUsed = weightedVolume;
+                        uint256 tokenFilled = (maticUsed *
+                            10 ** price_decimals) / o.desiredPrice;
+
+                        handleTrade(orderType, o, maticUsed);
+                        remainingVolume -= maticUsed;
+
+                        o.remainQuantity -= tokenFilled;
+                        o.lastTradeTimestamp = block.timestamp;
+                    }
                 } else {
-                    o.remainQuantity -= allocatedVolume;
-                    o.lastTradeTimestamp = block.timestamp;
-                    remainingVolume -= allocatedVolume;
+                    // Seller is sending tokens, direct comparison
+                    if (weightedVolume >= o.remainQuantity) {
+                        handleTrade(orderType, o, o.remainQuantity);
+                        remainingVolume -= o.remainQuantity;
 
-                    // Transfer MATIC or tokens based on orderType
-                    handleTrade(orderType, o, allocatedVolume);
+                        o.remainQuantity = 0;
+                        o.isFilled = true;
+                        o.lastTradeTimestamp = block.timestamp;
+
+                        removeOrder(orders, j);
+                    } else {
+                        handleTrade(orderType, o, weightedVolume);
+                        remainingVolume -= weightedVolume;
+
+                        o.remainQuantity -= weightedVolume;
+                        o.lastTradeTimestamp = block.timestamp;
+                    }
                 }
 
-                if (remainingVolume == 0) {
-                    break;
-                }
+                if (remainingVolume == 0) break;
             }
 
-            if (remainingVolume == 0) {
-                break;
-            }
+            if (remainingVolume == 0) break;
         }
 
-        require(
-            remainingVolume == 0,
-            "Insufficient token supply to fulfill order"
-        );
+        require(remainingVolume == 0, "Insufficient market depth");
     }
 
     /**
@@ -215,52 +232,49 @@ contract OrderBook is
     function handleTrade(
         OrderType orderType,
         Order storage order,
-        uint256 allocatedVolume
+        uint256 tradeValue // in MATIC (if BUY) or tokens (if SELL)
     ) internal {
         if (orderType == OrderType.BUY) {
-            // Send MATIC to the seller and deduct fee
-            (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
-                allocatedVolume,
+            // MATIC to seller, tokens to buyer
+            (uint256 realMatic, uint256 maticFee) = getAmountDeductFee(
+                tradeValue,
                 OrderType.SELL
             );
-            payable(order.trader).transfer(realAmount);
-            payable(treasury).transfer(feeAmount);
+            payable(order.trader).transfer(realMatic);
+            payable(treasury).transfer(maticFee);
 
-            // Send tokens to the buyer
-            (uint256 tokenAmount, uint256 tokenFeeAmount) = getAmountDeductFee(
-                allocatedVolume,
+            // Convert MATIC to tokens
+            uint256 tokenAmount = (tradeValue * 10 ** price_decimals) /
+                order.desiredPrice;
+            (uint256 realTokens, uint256 tokenFee) = getAmountDeductFee(
+                tokenAmount,
                 OrderType.BUY
             );
             IERC20Upgradeable(tokenAddress).safeTransfer(
                 msg.sender,
-                tokenAmount
+                realTokens
             );
-            IERC20Upgradeable(tokenAddress).safeTransfer(
-                treasury,
-                tokenFeeAmount
-            );
-        } else if (orderType == OrderType.SELL) {
-            // Send tokens to the buyer and deduct fee
-            (uint256 tokenAmount, uint256 tokenFeeAmount) = getAmountDeductFee(
-                allocatedVolume,
+            IERC20Upgradeable(tokenAddress).safeTransfer(treasury, tokenFee);
+        } else {
+            // Tokens to buyer, MATIC to seller
+            (uint256 realTokens, uint256 tokenFee) = getAmountDeductFee(
+                tradeValue,
                 OrderType.BUY
             );
             IERC20Upgradeable(tokenAddress).safeTransfer(
                 order.trader,
-                tokenAmount
+                realTokens
             );
-            IERC20Upgradeable(tokenAddress).safeTransfer(
-                treasury,
-                tokenFeeAmount
-            );
+            IERC20Upgradeable(tokenAddress).safeTransfer(treasury, tokenFee);
 
-            // Send MATIC to the seller
-            (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
-                allocatedVolume,
+            uint256 maticAmount = (tradeValue * order.desiredPrice) /
+                10 ** price_decimals;
+            (uint256 realMatic, uint256 maticFee) = getAmountDeductFee(
+                maticAmount,
                 OrderType.SELL
             );
-            payable(msg.sender).transfer(realAmount);
-            payable(treasury).transfer(feeAmount);
+            payable(msg.sender).transfer(realMatic);
+            payable(treasury).transfer(maticFee);
         }
     }
 
