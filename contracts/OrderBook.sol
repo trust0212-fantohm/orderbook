@@ -42,6 +42,10 @@ contract OrderBook is
         require(_token != address(0), "Invalid Token");
         require(_treasury != address(0), "Invalid Token");
         require(_oracle != address(0), "Invalid Token");
+
+        __Ownable_init();
+        __ReentrancyGuard_init();
+
         tokenAddress = _token;
         treasury = _treasury;
         oracle = _oracle;
@@ -514,7 +518,7 @@ contract OrderBook is
                 i >= activeSellOrders.length - depth;
                 i--
             ) {
-                bestActiveSellOrders[i] = activeBuyOrders[i];
+                bestActiveSellOrders[i] = activeSellOrders[i];
             }
             return (price, bestActiveSellOrders);
         }

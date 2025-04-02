@@ -11,11 +11,11 @@ describe("Order book test", () => {
       const { orderBook, owner, user1 } = await loadFixture(basicFixture);
 
       // buy order
-      await expect(orderBook.createBuyMarketOrder({ value: ethers.utils.parseEther("1") })).to.be.revertedWith("Insufficient SellOrders");
+      await expect(orderBook.createBuyMarketOrder({ value: ethers.utils.parseEther("1") })).to.be.revertedWith("No active sell orders");
       await expect(orderBook.createBuyMarketOrder()).to.be.revertedWith("Insufficient matic amount");
 
       // sell order
-      await expect(orderBook.createSellMarketOrder(ethers.utils.parseEther("100"))).to.be.revertedWith("Insufficient BuyOrders");
+      await expect(orderBook.createSellMarketOrder(ethers.utils.parseEther("100"))).to.be.revertedWith("No active buy orders");
       await expect(orderBook.createSellMarketOrder(0)).to.be.revertedWith("Invalid Token Amount");
     });
   });
