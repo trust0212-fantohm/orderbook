@@ -2,12 +2,8 @@ import { loadFixture } from "ethereum-waffle"
 import { basicFixture } from "./fixture"
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { OrderType } from "./utils/help";
 import { parseEther } from "ethers/lib/utils";
-
-export enum OrderType {
-  BUY,
-  SELL
-}
 
 describe("Order book test", () => {
   describe("Create Market Order (without limit order)", () => {

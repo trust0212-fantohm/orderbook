@@ -77,7 +77,7 @@ contract OrderBook is
 
         require(activeSellOrders.length > 0, "No active sell orders");
 
-        distributeVolumeByPrice(msg.value, OrderType.SELL);
+        distributeVolumeByPrice(marketOrder.remainMaticValue, OrderType.SELL);
         OrderCountByUser[msg.sender]++;
     }
 
