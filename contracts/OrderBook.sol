@@ -57,7 +57,12 @@ contract OrderBook is
     /**
      * @dev Create a new buy market order and distribute volume proportionally
      */
-    function createBuyMarketOrder() external payable nonReentrant {
+    function createBuyMarketOrder()
+        external
+        payable
+        nonReentrant
+        returns (uint256)
+    {
         require(msg.value > 0, "Insufficient matic amount");
 
         Order memory marketOrder = Order(
@@ -81,14 +86,28 @@ contract OrderBook is
 
         require(activeSellOrders.length > 0, "No active sell orders");
 
+        emit OrderCreated(
+            marketOrder.id,
+            msg.sender,
+            OrderType.BUY,
+            0, // price not applicable
+            msg.value,
+            0, // no timeInForce for market
+            true
+        );
+
         distributeVolumeByPrice(marketOrder.remainMaticValue, OrderType.SELL);
         OrderCountByUser[msg.sender]++;
+
+        return marketOrder.id;
     }
 
     /**
      * @dev Create a new sell market order and distribute volume proportionally
      */
-    function createSellMarketOrder(uint256 quantity) external nonReentrant {
+    function createSellMarketOrder(
+        uint256 quantity
+    ) external nonReentrant returns (uint256) {
         require(quantity > 0, "Invalid Token Amount");
 
         IERC20Upgradeable(tokenAddress).safeTransferFrom(
@@ -118,8 +137,20 @@ contract OrderBook is
 
         require(activeBuyOrders.length > 0, "No active buy orders");
 
+        emit OrderCreated(
+            marketOrder.id,
+            msg.sender,
+            OrderType.SELL,
+            0, // price not applicable
+            quantity,
+            0, // no timeInForce for market
+            true
+        );
+
         distributeVolumeByPrice(marketOrder.remainQuantity, OrderType.BUY);
         OrderCountByUser[msg.sender]++;
+
+        return marketOrder.id;
     }
 
     /**
@@ -163,22 +194,35 @@ contract OrderBook is
                 orders,
                 price
             );
+            if (totalWeight == 0) continue;
 
-            for (uint256 j = 0; j < orders.length; j++) {
+            for (uint256 j = 0; j < orders.length; ) {
                 Order storage o = orders[j];
-                if (o.desiredPrice != price || remainingVolume == 0) continue;
+
+                if (o.desiredPrice != price || remainingVolume == 0) {
+                    j++;
+                    continue;
+                }
 
                 uint256 weightedVolume = (volume * weights[j]) / totalWeight;
 
+                // For last order in group with this price, adjust rounding error
+                if (
+                    j == orders.length - 1 ||
+                    orders[j + 1].desiredPrice != price
+                ) {
+                    weightedVolume = remainingVolume;
+                }
+
                 if (orderType == OrderType.BUY) {
-                    // Buyer is sending MATIC, we convert it to token quantity for comparison
+                    // MATIC converted to token
                     uint256 tokenAmount = (weightedVolume *
                         10 ** price_decimals) / o.desiredPrice;
 
                     if (tokenAmount >= o.remainQuantity) {
-                        // Full fill
                         uint256 maticToPay = (o.remainQuantity *
                             o.desiredPrice) / 10 ** price_decimals;
+
                         handleTrade(orderType, o, maticToPay);
                         remainingVolume -= maticToPay;
 
@@ -186,12 +230,12 @@ contract OrderBook is
                         o.isFilled = true;
                         o.lastTradeTimestamp = block.timestamp;
 
-                        removeOrder(orders, j);
+                        fullfilledOrders.push(o);
+                        removeOrder(orders, j); // do NOT increment j here
+                        continue;
                     } else {
-                        // Partial fill
+                        uint256 tokenFilled = tokenAmount;
                         uint256 maticUsed = weightedVolume;
-                        uint256 tokenFilled = (maticUsed *
-                            10 ** price_decimals) / o.desiredPrice;
 
                         handleTrade(orderType, o, maticUsed);
                         remainingVolume -= maticUsed;
@@ -200,7 +244,7 @@ contract OrderBook is
                         o.lastTradeTimestamp = block.timestamp;
                     }
                 } else {
-                    // Seller is sending tokens, direct comparison
+                    // Token sale
                     if (weightedVolume >= o.remainQuantity) {
                         handleTrade(orderType, o, o.remainQuantity);
                         remainingVolume -= o.remainQuantity;
@@ -209,7 +253,9 @@ contract OrderBook is
                         o.isFilled = true;
                         o.lastTradeTimestamp = block.timestamp;
 
+                        fullfilledOrders.push(o);
                         removeOrder(orders, j);
+                        continue;
                     } else {
                         handleTrade(orderType, o, weightedVolume);
                         remainingVolume -= weightedVolume;
@@ -219,7 +265,7 @@ contract OrderBook is
                     }
                 }
 
-                if (remainingVolume == 0) break;
+                j++;
             }
 
             if (remainingVolume == 0) break;
@@ -362,7 +408,7 @@ contract OrderBook is
         uint256 quantity,
         uint256 timeInForce,
         OrderType orderType
-    ) external payable {
+    ) external payable returns (uint256) {
         if (orderType == OrderType.BUY) {
             require(
                 msg.value == (desiredPrice * quantity) / 10 ** price_decimals,
@@ -415,6 +461,18 @@ contract OrderBook is
         }
 
         OrderCountByUser[msg.sender]++;
+
+        emit OrderCreated(
+            newOrder.id,
+            msg.sender,
+            orderType,
+            desiredPrice,
+            quantity,
+            timeInForce,
+            false
+        );
+
+        return newOrder.id;
     }
 
     // Sort ASC [0, 1, 2, ...]
@@ -500,12 +558,10 @@ contract OrderBook is
             if (depth >= activeBuyOrders.length) {
                 return (price, activeBuyOrders);
             }
-            for (
-                uint256 i = activeBuyOrders.length - 1;
-                i >= activeBuyOrders.length - depth;
-                i--
-            ) {
-                bestActiveBuyOrders[i] = activeBuyOrders[i];
+            for (uint256 i = 0; i < depth && i < activeBuyOrders.length; i++) {
+                bestActiveBuyOrders[i] = activeBuyOrders[
+                    activeBuyOrders.length - 1 - i
+                ];
             }
             return (price, bestActiveBuyOrders);
         } else {
@@ -513,19 +569,17 @@ contract OrderBook is
             if (depth >= activeSellOrders.length) {
                 return (price, activeSellOrders);
             }
-            for (
-                uint256 i = activeSellOrders.length - 1;
-                i >= activeSellOrders.length - depth;
-                i--
-            ) {
-                bestActiveSellOrders[i] = activeSellOrders[i];
+            for (uint256 i = 0; i < depth && i < activeSellOrders.length; i++) {
+                bestActiveSellOrders[i] = activeSellOrders[
+                    activeSellOrders.length - 1 - i
+                ];
             }
             return (price, bestActiveSellOrders);
         }
     }
 
     function getOrderById(uint256 id) public view returns (Order memory) {
-        require(id > 0 && id < nonce, "Invalid Id");
+        require(id < nonce, "Invalid Id");
         for (uint256 i = 0; i < activeBuyOrders.length; i++) {
             Order memory order = activeBuyOrders[i];
             if (id == order.id) {
@@ -622,7 +676,7 @@ contract OrderBook is
         );
     }
 
-    function cancelOrder(uint256 id) external returns (bool) {
+    function cancelOrder(uint256 id) external {
         require(id < nonce, "Invalid Id");
         (OrderType orderType, uint256 i) = getIndex(id);
         Order storage order = orderType == OrderType.BUY
@@ -641,7 +695,7 @@ contract OrderBook is
             );
         }
 
-        return true;
+        emit OrderCancelled(id, msg.sender, orderType);
     }
 
     function getIndex(uint256 id) public view returns (OrderType, uint256) {

@@ -3,7 +3,7 @@
 pragma solidity ^0.8.4;
 
 interface IOrderBook {
-     enum OrderType {
+    enum OrderType {
         BUY,
         SELL
     }
@@ -20,7 +20,7 @@ interface IOrderBook {
         bool isFilled;
         bool isMarketOrder;
         bool isCanceled;
-        uint256 timeInForce; // 
+        uint256 timeInForce; //
         uint256 lastTradeTimestamp;
         uint256 createdAt;
     }
@@ -31,11 +31,6 @@ interface IOrderBook {
         uint256 amount;
     }
 
-    event OrderCanceled(
-        uint256 indexed orderId,
-        address indexed trader
-    );
-
     event TradeExecuted(
         uint256 indexed buyOrderId,
         uint256 indexed sellOrderId,
@@ -45,8 +40,21 @@ interface IOrderBook {
         uint256 quantity
     );
 
-    event OrderReverted(
+    event OrderReverted(uint256 indexed orderId, address indexed trader);
+
+    event OrderCreated(
         uint256 indexed orderId,
-        address indexed trader
+        address indexed trader,
+        OrderType orderType,
+        uint256 desiredPrice,
+        uint256 quantity,
+        uint256 timeInForce,
+        bool isMarket
+    );
+
+    event OrderCancelled(
+        uint256 indexed orderId,
+        address indexed trader,
+        OrderType orderType
     );
 }
