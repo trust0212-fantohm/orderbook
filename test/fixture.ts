@@ -2,7 +2,7 @@ import { ethers, upgrades } from "hardhat";
 
 export async function basicFixture() {
     const [owner, treasury, user1, user2, user3, sellTrader, buyTrader] = await ethers.getSigners();
-    
+
     // deploy test token
     const tokenFactory = await ethers.getContractFactory("ACME");
     const token = await tokenFactory.deploy();
@@ -22,7 +22,7 @@ export async function basicFixture() {
             oracle.address
         ],
         {
-        initializer: "initialize",
+            initializer: "initialize",
         }
     );
     await orderBook.deployed();
@@ -44,5 +44,5 @@ export async function basicFixture() {
     await token.connect(user3).approve(orderBook.address, ethers.utils.parseEther("10000"));
     await token.connect(sellTrader).approve(orderBook.address, ethers.utils.parseEther("10000"));
 
-    return {orderBook, oracle, token, owner, treasury, user1, user2, user3, sellTrader, buyTrader};
+    return { orderBook, oracle, token, owner, treasury, user1, user2, user3, sellTrader, buyTrader };
 }
