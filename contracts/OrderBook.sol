@@ -154,6 +154,157 @@ contract OrderBook is
     }
 
     /**
+     * @dev Create new limit order
+     */
+    function createLimitOrder(
+        uint256 desiredPrice,
+        uint256 quantity,
+        uint256 timeInForce,
+        OrderType orderType
+    ) external payable returns (uint256) {
+        if (orderType == OrderType.BUY) {
+            require(
+                msg.value == (desiredPrice * quantity) / 10 ** price_decimals,
+                "Invalid matic amount"
+            );
+        } else {
+            require(
+                msg.value == 0,
+                "Invalid matic amount for createLimitSellOrder"
+            );
+            IERC20Upgradeable(tokenAddress).safeTransferFrom(
+                msg.sender,
+                address(this),
+                quantity
+            );
+        }
+        require(timeInForce > block.timestamp, "Invalid time limit");
+
+        Order memory newOrder = Order(
+            nonce,
+            msg.sender,
+            orderType,
+            desiredPrice,
+            quantity,
+            quantity,
+            msg.value,
+            msg.value,
+            false,
+            false,
+            false,
+            timeInForce,
+            0,
+            block.timestamp
+        );
+
+        nonce++;
+
+        emit OrderCreated(
+            newOrder.id,
+            msg.sender,
+            orderType,
+            desiredPrice,
+            quantity,
+            timeInForce,
+            false
+        );
+
+        // Insert newOrder into active sell/buy limit order list. It should be sorted by desiredPrice
+        // For Sell orders, we sort it DESC, so it should be [9,8,.., 2,1,0]
+        // For Buy orders, we sort it ASC, so it should be [0,1,2,...,8,9]
+        // In this way, we iterate order list from end, and pop the last order from active order list
+        if (orderType == OrderType.BUY) {
+            insertBuyLimitOrder(newOrder);
+        } else {
+            insertSellLimitOrder(newOrder);
+        }
+
+        if (activeBuyOrders.length > 0 && activeSellOrders.length > 0) {
+            executeLimitOrders();
+        }
+
+        OrderCountByUser[msg.sender]++;
+
+        return newOrder.id;
+    }
+
+    // Sort ASC [0, 1, 2, ...]
+    function insertBuyLimitOrder(Order memory newLimitBuyOrder) internal {
+        uint256 i = activeBuyOrders.length;
+
+        activeBuyOrders.push(newLimitBuyOrder);
+
+        while (
+            i > 0 &&
+            activeBuyOrders[i - 1].desiredPrice > newLimitBuyOrder.desiredPrice
+        ) {
+            activeBuyOrders[i] = activeBuyOrders[i - 1];
+            i--;
+        }
+
+        activeBuyOrders[i] = newLimitBuyOrder;
+    }
+
+    // Sort DESC [9, 8, ..., 1, 0]
+    function insertSellLimitOrder(Order memory newLimitSellOrder) internal {
+        uint256 i = activeSellOrders.length;
+
+        activeSellOrders.push(newLimitSellOrder);
+
+        while (
+            i > 0 &&
+            activeSellOrders[i - 1].desiredPrice <
+            newLimitSellOrder.desiredPrice
+        ) {
+            activeSellOrders[i] = activeSellOrders[i - 1];
+            i--;
+        }
+
+        activeSellOrders[i] = newLimitSellOrder;
+    }
+
+    /**
+     * @dev Execute limit orders with weighted distribution logic
+     */
+    function executeLimitOrders() public nonReentrant {
+        cleanLimitOrders();
+
+        require(
+            activeBuyOrders.length > 0 && activeSellOrders.length > 0,
+            "No active limit orders"
+        );
+
+        uint256 remainingQuantity;
+        uint256 priceToMatch;
+
+        while (
+            activeBuyOrders.length > 0 &&
+            activeSellOrders.length > 0 &&
+            activeBuyOrders[activeBuyOrders.length - 1].desiredPrice >=
+            activeSellOrders[activeSellOrders.length - 1].desiredPrice
+        ) {
+            Order storage buyOrder = activeBuyOrders[
+                activeBuyOrders.length - 1
+            ];
+            Order storage sellOrder = activeSellOrders[
+                activeSellOrders.length - 1
+            ];
+
+            // Determine the volume that can be matched
+            remainingQuantity = buyOrder.remainQuantity >=
+                sellOrder.remainQuantity
+                ? sellOrder.remainQuantity
+                : buyOrder.remainQuantity;
+
+            priceToMatch = sellOrder.desiredPrice;
+
+            // Distribute volume for both buy and sell orders at this price
+            distributeVolumeByPrice(remainingQuantity, OrderType.BUY);
+            distributeVolumeByPrice(remainingQuantity, OrderType.SELL);
+        }
+    }
+
+    /**
      * @dev Clean invalid orders from order book
      */
     function cleanLimitOrders() internal {
@@ -176,7 +327,7 @@ contract OrderBook is
      * Processes orders price-by-price until the volume is fully allocated.
      */
     function distributeVolumeByPrice(
-        uint256 volume, // either MATIC (for buy market order) or token amount (for sell market order)
+        uint256 volume,
         OrderType orderType
     ) internal {
         Order[] storage orders = orderType == OrderType.BUY
@@ -185,10 +336,23 @@ contract OrderBook is
 
         uint256 remainingVolume = volume;
 
-        // Iterate from the end (lowest price for sell, highest for buy)
+        // Track unique price levels already processed
+        mapping(uint256 => bool) processedPrices;
+
         for (uint256 i = orders.length; i > 0; i--) {
-            Order storage referenceOrder = orders[i - 1];
-            uint256 price = referenceOrder.desiredPrice;
+            Order storage refOrder = orders[i - 1];
+            uint256 price = refOrder.desiredPrice;
+
+            // Skip if already processed this price
+            if (processedPrices[price]) continue;
+            processedPrices[price] = true;
+
+            // Collect orders at same price
+            uint256 count = 0;
+            for (uint256 j = 0; j < orders.length; j++) {
+                if (orders[j].desiredPrice == price) count++;
+            }
+            if (count == 0) continue;
 
             (uint256[] memory weights, uint256 totalWeight) = getOrderWeights(
                 orders,
@@ -196,79 +360,60 @@ contract OrderBook is
             );
             if (totalWeight == 0) continue;
 
+            uint256 priceVolume = remainingVolume;
+
             for (uint256 j = 0; j < orders.length; ) {
                 Order storage o = orders[j];
 
-                if (o.desiredPrice != price || remainingVolume == 0) {
+                if (o.desiredPrice != price || priceVolume == 0) {
                     j++;
                     continue;
                 }
 
                 uint256 weightedVolume = (volume * weights[j]) / totalWeight;
 
-                // For last order in group with this price, adjust rounding error
-                if (
-                    j == orders.length - 1 ||
-                    orders[j + 1].desiredPrice != price
-                ) {
-                    weightedVolume = remainingVolume;
-                }
-
                 if (orderType == OrderType.BUY) {
-                    // MATIC converted to token
+                    // Convert MATIC to tokens
                     uint256 tokenAmount = (weightedVolume *
                         10 ** price_decimals) / o.desiredPrice;
 
                     if (tokenAmount >= o.remainQuantity) {
                         uint256 maticToPay = (o.remainQuantity *
                             o.desiredPrice) / 10 ** price_decimals;
-
                         handleTrade(orderType, o, maticToPay);
-                        remainingVolume -= maticToPay;
-
+                        priceVolume -= maticToPay;
                         o.remainQuantity = 0;
                         o.isFilled = true;
-                        o.lastTradeTimestamp = block.timestamp;
-
                         fullfilledOrders.push(o);
-                        removeOrder(orders, j); // do NOT increment j here
+                        removeOrder(orders, j);
                         continue;
                     } else {
-                        uint256 tokenFilled = tokenAmount;
                         uint256 maticUsed = weightedVolume;
-
                         handleTrade(orderType, o, maticUsed);
-                        remainingVolume -= maticUsed;
-
-                        o.remainQuantity -= tokenFilled;
-                        o.lastTradeTimestamp = block.timestamp;
+                        priceVolume -= maticUsed;
+                        o.remainQuantity -= tokenAmount;
                     }
                 } else {
-                    // Token sale
+                    // Token Sale
                     if (weightedVolume >= o.remainQuantity) {
                         handleTrade(orderType, o, o.remainQuantity);
-                        remainingVolume -= o.remainQuantity;
-
+                        priceVolume -= o.remainQuantity;
                         o.remainQuantity = 0;
                         o.isFilled = true;
-                        o.lastTradeTimestamp = block.timestamp;
-
                         fullfilledOrders.push(o);
                         removeOrder(orders, j);
                         continue;
                     } else {
                         handleTrade(orderType, o, weightedVolume);
-                        remainingVolume -= weightedVolume;
-
+                        priceVolume -= weightedVolume;
                         o.remainQuantity -= weightedVolume;
-                        o.lastTradeTimestamp = block.timestamp;
                     }
                 }
 
                 j++;
             }
 
-            if (remainingVolume == 0) break;
+            if (priceVolume == 0) break;
         }
 
         require(remainingVolume == 0, "Insufficient market depth");
@@ -357,157 +502,6 @@ contract OrderBook is
             orders[i] = orders[i + 1];
         }
         orders.pop();
-    }
-
-    /**
-     * @dev Execute limit orders with weighted distribution logic
-     */
-    function executeLimitOrders() public nonReentrant {
-        cleanLimitOrders();
-
-        require(
-            activeBuyOrders.length > 0 && activeSellOrders.length > 0,
-            "No active limit orders"
-        );
-
-        uint256 remainingQuantity;
-        uint256 priceToMatch;
-
-        while (
-            activeBuyOrders.length > 0 &&
-            activeSellOrders.length > 0 &&
-            activeBuyOrders[activeBuyOrders.length - 1].desiredPrice >=
-            activeSellOrders[activeSellOrders.length - 1].desiredPrice
-        ) {
-            Order storage buyOrder = activeBuyOrders[
-                activeBuyOrders.length - 1
-            ];
-            Order storage sellOrder = activeSellOrders[
-                activeSellOrders.length - 1
-            ];
-
-            // Determine the volume that can be matched
-            remainingQuantity = buyOrder.remainQuantity >=
-                sellOrder.remainQuantity
-                ? sellOrder.remainQuantity
-                : buyOrder.remainQuantity;
-
-            priceToMatch = sellOrder.desiredPrice;
-
-            // Distribute volume for both buy and sell orders at this price
-            distributeVolumeByPrice(remainingQuantity, OrderType.BUY);
-            distributeVolumeByPrice(remainingQuantity, OrderType.SELL);
-        }
-    }
-
-    /**
-     * @dev Create new limit order
-     */
-    function createLimitOrder(
-        uint256 desiredPrice,
-        uint256 quantity,
-        uint256 timeInForce,
-        OrderType orderType
-    ) external payable returns (uint256) {
-        if (orderType == OrderType.BUY) {
-            require(
-                msg.value == (desiredPrice * quantity) / 10 ** price_decimals,
-                "Invalid matic amount"
-            );
-        } else {
-            require(
-                msg.value == 0,
-                "Invalid matic amount for createLimitSellOrder"
-            );
-            IERC20Upgradeable(tokenAddress).safeTransferFrom(
-                msg.sender,
-                address(this),
-                quantity
-            );
-        }
-        require(timeInForce > block.timestamp, "Invalid time limit");
-
-        Order memory newOrder = Order(
-            nonce,
-            msg.sender,
-            orderType,
-            desiredPrice,
-            quantity,
-            quantity,
-            msg.value,
-            msg.value,
-            false,
-            false,
-            false,
-            timeInForce,
-            0,
-            block.timestamp
-        );
-
-        nonce++;
-
-        // Insert newOrder into active sell/buy limit order list. It should be sorted by desiredPrice
-        // For Sell orders, we sort it DESC, so it should be [9,8,.., 2,1,0]
-        // For Buy orders, we sort it ASC, so it should be [0,1,2,...,8,9]
-        // In this way, we iterate order list from end, and pop the last order from active order list
-        if (orderType == OrderType.BUY) {
-            insertBuyLimitOrder(newOrder);
-        } else {
-            insertSellLimitOrder(newOrder);
-        }
-
-        if (activeBuyOrders.length > 0 && activeSellOrders.length > 0) {
-            executeLimitOrders();
-        }
-
-        OrderCountByUser[msg.sender]++;
-
-        emit OrderCreated(
-            newOrder.id,
-            msg.sender,
-            orderType,
-            desiredPrice,
-            quantity,
-            timeInForce,
-            false
-        );
-
-        return newOrder.id;
-    }
-
-    // Sort ASC [0, 1, 2, ...]
-    function insertBuyLimitOrder(Order memory newLimitBuyOrder) internal {
-        uint256 i = activeBuyOrders.length;
-
-        activeBuyOrders.push(newLimitBuyOrder);
-
-        while (
-            i > 0 &&
-            activeBuyOrders[i - 1].desiredPrice > newLimitBuyOrder.desiredPrice
-        ) {
-            activeBuyOrders[i] = activeBuyOrders[i - 1];
-            i--;
-        }
-
-        activeBuyOrders[i] = newLimitBuyOrder;
-    }
-
-    // Sort DESC [9, 8, ..., 1, 0]
-    function insertSellLimitOrder(Order memory newLimitSellOrder) internal {
-        uint256 i = activeSellOrders.length;
-
-        activeSellOrders.push(newLimitSellOrder);
-
-        while (
-            i > 0 &&
-            activeSellOrders[i - 1].desiredPrice <
-            newLimitSellOrder.desiredPrice
-        ) {
-            activeSellOrders[i] = activeSellOrders[i - 1];
-            i--;
-        }
-
-        activeSellOrders[i] = newLimitSellOrder;
     }
 
     function isInvalidOrder(Order memory order) public view returns (bool) {
