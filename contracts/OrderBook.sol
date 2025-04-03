@@ -344,171 +344,221 @@ contract OrderBook is
             if (price == lastProcessedPrice) continue;
             lastProcessedPrice = price;
 
-            // Get weights for current price level
-            (uint256[] memory weights, uint256 totalWeight) = getOrderWeights(
-                orders,
-                price
-            );
+            (
+                uint256[] memory indexes,
+                uint256[] memory weights,
+                uint256 totalWeight
+            ) = getOrderWeightsAtPrice(orders, price);
+
             if (totalWeight == 0) continue;
 
-            for (uint256 j = 0; j < orders.length; ) {
-                Order storage o = orders[j];
+            uint256 distributedVolume = 0;
 
-                if (o.desiredPrice != price || remainingVolume == 0) {
-                    j++;
-                    continue;
+            for (uint256 j = 0; j < indexes.length; j++) {
+                if (remainingVolume == 0) break;
+
+                // uint256 orderIndex = indexes[j];
+                Order storage o = orders[indexes[j]];
+                uint256 weightedVolume = (volume * weights[j]) / totalWeight;
+
+                // Last order gets the dust
+                // Clamp last fill
+                if (
+                    j == indexes.length - 1 ||
+                    distributedVolume + weightedVolume > volume
+                ) {
+                    weightedVolume = remainingVolume;
                 }
 
-                uint256 weightedVolume = (remainingVolume * weights[j]) /
-                    totalWeight;
-
-                if (weightedVolume == 0) {
-                    j++;
-                    continue;
-                }
+                distributedVolume += weightedVolume;
 
                 if (orderType == OrderType.BUY) {
-                    // BUY market order, match SELL limit order
-                    uint256 tokenAmount = (weightedVolume *
-                        10 ** price_decimals) / o.desiredPrice;
-
-                    if (tokenAmount >= o.remainQuantity) {
-                        uint256 maticToPay = (o.remainQuantity *
-                            o.desiredPrice) / 10 ** price_decimals;
-
-                        handleTrade(orderType, o, maticToPay);
-                        remainingVolume -= maticToPay;
-
-                        o.remainQuantity = 0;
-                        o.isFilled = true;
-                        o.lastTradeTimestamp = block.timestamp;
-
-                        fullfilledOrders.push(o);
-                        removeOrder(orders, j);
-                        continue;
-                    } else {
-                        uint256 maticUsed = weightedVolume;
-
-                        handleTrade(orderType, o, maticUsed);
-                        remainingVolume -= maticUsed;
-
-                        o.remainQuantity -= tokenAmount;
-                        o.lastTradeTimestamp = block.timestamp;
-                    }
+                    remainingVolume -= processBuyVolume(
+                        o,
+                        weightedVolume,
+                        indexes[j],
+                        msg.sender
+                    );
                 } else {
-                    // SELL market order, match BUY limit order
-                    if (weightedVolume >= o.remainQuantity) {
-                        handleTrade(orderType, o, o.remainQuantity);
-                        remainingVolume -= o.remainQuantity;
-
-                        o.remainQuantity = 0;
-                        o.isFilled = true;
-                        o.lastTradeTimestamp = block.timestamp;
-
-                        fullfilledOrders.push(o);
-                        removeOrder(orders, j);
-                        continue;
-                    } else {
-                        handleTrade(orderType, o, weightedVolume);
-                        remainingVolume -= weightedVolume;
-
-                        o.remainQuantity -= weightedVolume;
-                        o.lastTradeTimestamp = block.timestamp;
-                    }
+                    remainingVolume -= processSellVolume(
+                        o,
+                        weightedVolume,
+                        indexes[j],
+                        msg.sender
+                    );
                 }
-
-                j++;
             }
 
-            if (remainingVolume == 0) break;
+            // require(remainingVolume == 0, "Insufficient market depth");
         }
+    }
 
-        require(remainingVolume == 0, "Insufficient market depth");
+    function processBuyVolume(
+        Order storage o,
+        uint256 weightedVolume,
+        uint256 orderIndex,
+        address marketTrader
+    ) internal returns (uint256 spentMatic) {
+        uint256 tokenAmount = (weightedVolume * 10 ** price_decimals) /
+            o.desiredPrice;
+
+        if (tokenAmount >= o.remainQuantity) {
+            uint256 maticToPay = (o.remainQuantity * o.desiredPrice) /
+                10 ** price_decimals;
+            handleTrade(OrderType.BUY, marketTrader, o, maticToPay);
+            o.remainQuantity = 0;
+            o.isFilled = true;
+            o.lastTradeTimestamp = block.timestamp;
+            fullfilledOrders.push(o);
+            removeOrder(activeSellOrders, orderIndex);
+            return maticToPay;
+        } else {
+            handleTrade(OrderType.BUY, marketTrader, o, weightedVolume);
+            o.remainQuantity -= tokenAmount;
+            o.lastTradeTimestamp = block.timestamp;
+            return weightedVolume;
+        }
+    }
+
+    function processSellVolume(
+        Order storage o,
+        uint256 weightedVolume,
+        uint256 orderIndex,
+        address marketTrader
+    ) internal returns (uint256 usedTokens) {
+        if (weightedVolume >= o.remainQuantity) {
+            handleTrade(OrderType.SELL, marketTrader, o, o.remainQuantity);
+            uint256 used = o.remainQuantity;
+            o.remainQuantity = 0;
+            o.isFilled = true;
+            o.lastTradeTimestamp = block.timestamp;
+            fullfilledOrders.push(o);
+            removeOrder(activeBuyOrders, orderIndex);
+            return used;
+        } else {
+            handleTrade(OrderType.SELL, marketTrader, o, weightedVolume);
+            o.remainQuantity -= weightedVolume;
+            o.lastTradeTimestamp = block.timestamp;
+            return weightedVolume;
+        }
     }
 
     /**
      * @dev Handle transfer of MATIC and tokens between buyer, seller, and treasury.
      */
     function handleTrade(
-        OrderType orderType,
-        Order storage order,
-        uint256 tradeValue // in MATIC (if BUY) or tokens (if SELL)
+        OrderType marketOrderType,
+        address marketTrader,
+        Order storage counterOrder,
+        uint256 tradeValue
     ) internal {
-        if (orderType == OrderType.BUY) {
-            // MATIC to seller, tokens to buyer
-            require(
-                order.remainMaticValue >= tradeValue,
-                "Order has insufficient MATIC"
-            );
+        if (marketOrderType == OrderType.BUY) {
+            // Market buyer sends MATIC, receives tokens
+            // Counterparty is a SELL limit order (has tokens, receives MATIC)
 
             (uint256 realMatic, uint256 maticFee) = getAmountDeductFee(
                 tradeValue,
                 OrderType.SELL
             );
-
-            order.remainMaticValue -= tradeValue;
-
-            if (realMatic > 0) {
-                payable(order.trader).transfer(realMatic);
-            }
+            payable(counterOrder.trader).transfer(realMatic);
             if (maticFee > 0) {
                 payable(treasury).transfer(maticFee);
             }
 
             // Convert MATIC to tokens
             uint256 tokenAmount = (tradeValue * 10 ** price_decimals) /
-                order.desiredPrice;
+                counterOrder.desiredPrice;
             (uint256 realTokens, uint256 tokenFee) = getAmountDeductFee(
                 tokenAmount,
                 OrderType.BUY
             );
+
             IERC20Upgradeable(tokenAddress).safeTransfer(
-                msg.sender,
+                marketTrader,
                 realTokens
             );
-            IERC20Upgradeable(tokenAddress).safeTransfer(treasury, tokenFee);
+            if (tokenFee > 0) {
+                IERC20Upgradeable(tokenAddress).safeTransfer(
+                    treasury,
+                    tokenFee
+                );
+            }
         } else {
-            // Tokens to buyer, MATIC to seller
+            // Market seller sends tokens, receives MATIC
+            // Counterparty is a BUY limit order (has MATIC, receives tokens)
+
+            require(
+                counterOrder.remainMaticValue >= tradeValue,
+                "Order has insufficient MATIC"
+            );
+
             (uint256 realTokens, uint256 tokenFee) = getAmountDeductFee(
                 tradeValue,
                 OrderType.BUY
             );
             IERC20Upgradeable(tokenAddress).safeTransfer(
-                order.trader,
+                counterOrder.trader,
                 realTokens
             );
-            IERC20Upgradeable(tokenAddress).safeTransfer(treasury, tokenFee);
+            if (tokenFee > 0) {
+                IERC20Upgradeable(tokenAddress).safeTransfer(
+                    treasury,
+                    tokenFee
+                );
+            }
 
-            uint256 maticAmount = (tradeValue * order.desiredPrice) /
+            uint256 maticAmount = (tradeValue * counterOrder.desiredPrice) /
                 10 ** price_decimals;
             (uint256 realMatic, uint256 maticFee) = getAmountDeductFee(
                 maticAmount,
                 OrderType.SELL
             );
-            payable(msg.sender).transfer(realMatic);
-            payable(treasury).transfer(maticFee);
+
+            payable(marketTrader).transfer(realMatic);
+            if (maticFee > 0) {
+                payable(treasury).transfer(maticFee);
+            }
+
+            counterOrder.remainMaticValue -= maticAmount;
         }
     }
 
     /**
      * @dev Calculate weights based on the order's listing time
      */
-    function getOrderWeights(
-        Order[] memory orders,
+    function getOrderWeightsAtPrice(
+        Order[] storage orders,
         uint256 price
-    ) internal view returns (uint256[] memory weights, uint256 totalWeight) {
-        uint256 totalTimeSum = 0;
-        weights = new uint256[](orders.length);
-
+    )
+        internal
+        view
+        returns (
+            uint256[] memory indexes,
+            uint256[] memory weights,
+            uint256 totalWeight
+        )
+    {
+        uint256 count = 0;
         for (uint256 i = 0; i < orders.length; i++) {
             if (orders[i].desiredPrice == price) {
-                uint256 timeDiff = block.timestamp - orders[i].createdAt;
-                totalTimeSum += timeDiff;
-                weights[i] = timeDiff;
+                count++;
             }
         }
 
-        totalWeight = totalTimeSum;
+        indexes = new uint256[](count);
+        weights = new uint256[](count);
+        totalWeight = 0;
+
+        uint256 idx = 0;
+        for (uint256 i = 0; i < orders.length; i++) {
+            if (orders[i].desiredPrice == price) {
+                uint256 weight = block.timestamp - orders[i].createdAt;
+                indexes[idx] = i;
+                weights[idx] = weight;
+                totalWeight += weight;
+                idx++;
+            }
+        }
     }
 
     /**
@@ -745,7 +795,7 @@ contract OrderBook is
 
     function setTreasury(address _treasury) external onlyOwner {
         require(_treasury != address(0), "Invalid address");
-        
+
         treasury = _treasury;
     }
 

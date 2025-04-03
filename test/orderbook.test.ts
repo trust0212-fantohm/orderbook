@@ -291,109 +291,56 @@ describe("Order book test", () => {
     })
   });
 
-  describe("Weighted Matching Logic", () => {
-    it("should match sell market order against time-weighted buy limit orders", async () => {
-      const { orderBook, owner, user1, user2, user3, token, treasury, buyTrader } = await loadFixture(basicFixture);
+  describe("Time-weighted Distribution Test", () => {
+    it("Should allocate more volume to older orders", async () => {
+      const { orderBook, user1, user2, user3 } = await loadFixture(basicFixture);
+      const price = parseEther("0.1");
+      const quantity = parseEther("100");
+      const block = await ethers.provider.getBlock("latest");
+      const timeInForce = block.timestamp + 3600;
 
-      const now = (await ethers.provider.getBlock("latest")).timestamp;
+      // Create 3 sell limit orders at same price
+      await orderBook.connect(user1).createLimitOrder(price, quantity, timeInForce, OrderType.SELL);
+      await ethers.provider.send("evm_increaseTime", [60]); // simulate 60 sec later
+      await ethers.provider.send("evm_mine", []);
+      await orderBook.connect(user2).createLimitOrder(price, quantity, timeInForce, OrderType.SELL);
+      await ethers.provider.send("evm_increaseTime", [60]); // simulate 60 sec later
+      await ethers.provider.send("evm_mine", []);
+      await orderBook.connect(user3).createLimitOrder(price, quantity, timeInForce, OrderType.SELL);
 
-      const desiredPrice = ethers.utils.parseUnits("1", 18); // 1 MATIC/token
-      const quantityEach = ethers.utils.parseEther("10"); // 10 tokens
-      const totalMATIC = ethers.utils.parseEther("20"); // for 2 orders
+      // Sanity check: 3 orders at same price
+      const sellOrdersBefore = await orderBook.orderBook(10, OrderType.SELL);
+      expect(sellOrdersBefore[1].length).to.equal(3);
 
-      // User1 creates buy limit order
-      await orderBook
-        .connect(user1)
-        .createLimitOrder(
-          desiredPrice,
-          quantityEach,
-          now + 3600,
-          0, // OrderType.BUY
-          { value: ethers.utils.parseEther("10") }
-        );
+      // BUY market order with value enough to partially fill all 3 orders
+      const marketBuyValue = parseEther("15"); // MATIC
 
-      // Wait 2 seconds
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await orderBook.createBuyMarketOrder({ value: marketBuyValue });
 
-      // User2 creates buy limit order (less weight)
-      await orderBook
-        .connect(user2)
-        .createLimitOrder(
-          desiredPrice,
-          quantityEach,
-          now + 3600,
-          0,
-          { value: ethers.utils.parseEther("10") }
-        );
+      // Fetch all orders by user after trade
+      const [u1Active, , u1Filled] = await orderBook.getOrdersByUser(user1.address);
+      const [u2Active, , u2Filled] = await orderBook.getOrdersByUser(user2.address);
+      const [u3Active, , u3Filled] = await orderBook.getOrdersByUser(user3.address);
 
-      // User3 executes sell market order for 20 tokens
-      await orderBook.connect(user3).createSellMarketOrder(ethers.utils.parseEther("20"));
+      const getFilledAmount = (orders: any[]) => {
+        if (orders.length === 0) return parseEther("0");
+        const o = orders[0];
+        return o.quantity.sub(o.remainQuantity);
+      };
 
-      // Check MATIC received by user3 (should be ~20 minus fees)
-      const balance = await ethers.provider.getBalance(user3.address);
-      expect(balance).to.be.above(ethers.utils.parseEther("99")); // assuming fresh wallet from hardhat
+      const u1FilledQty = getFilledAmount(u1Filled);
+      const u2FilledQty = getFilledAmount(u2Filled);
+      const u3FilledQty = getFilledAmount(u3Filled);
 
-      // Confirm orders are filled
-      const buyOrder1 = await orderBook.getOrderById(0);
-      const buyOrder2 = await orderBook.getOrderById(1);
+      console.log("User1 filled:", ethers.utils.formatEther(u1FilledQty));
+      console.log("User2 filled:", ethers.utils.formatEther(u2FilledQty));
+      console.log("User3 filled:", ethers.utils.formatEther(u3FilledQty));
 
-      expect(buyOrder1.isFilled).to.be.true;
-      expect(buyOrder2.isFilled).to.be.true;
+      // Expect that user1 > user2 > user3 (due to older listing time)
+      expect(u1FilledQty.gt(u2FilledQty)).to.be.true;
+      expect(u2FilledQty.gt(u3FilledQty)).to.be.true;
     });
-    //   const { orderBook, token, user1, user2, treasury } = await loadFixture(basicFixture);
-    //   const currentBlock = await ethers.provider.getBlock("latest");
-
-    //   // SELL limit order (100 tokens @ 0.2 MATIC each)
-    //   const sellPrice = parseEther("0.2");
-    //   const sellQty = parseEther("100");
-    //   await orderBook.connect(user1).createLimitOrder(sellPrice, sellQty, currentBlock.timestamp + 3600, OrderType.SELL);
-
-    //   // BUY market order for ~50 tokens
-    //   const tokenQty = parseEther("50");
-    //   const totalMatic = tokenQty.mul(sellPrice).div(parseEther("1"));
-    //   const buyMaticAmount = totalMatic.add(parseEther("0.01")); // buffer for fees
-
-    //   const beforeTokenBalance = await token.balanceOf(user2.address);
-    //   await orderBook.connect(user2).createBuyMarketOrder({ value: buyMaticAmount });
-    //   const afterTokenBalance = await token.balanceOf(user2.address);
-
-    //   const tokenReceived = afterTokenBalance.sub(beforeTokenBalance);
-    //   console.log("Tokens received by market buyer:", ethers.utils.formatEther(tokenReceived));
-
-    //   expect(tokenReceived.gt(parseEther("45"))).to.be.true;
-    //   expect(tokenReceived.lt(parseEther("55"))).to.be.true;
-    // });
-
-    // it("Matching respects price priority before time weighting", async () => {
-    //   const { orderBook, user1, user2, user3, treasury } = await loadFixture(basicFixture);
-    //   const currentBlock = await ethers.provider.getBlock("latest");
-
-    //   const qty = parseEther("100");
-    //   const lowPrice = parseEther("0.1");
-    //   const highPrice = parseEther("0.2");
-
-    //   // 2 SELL limit orders @ lowPrice, 1 @ highPrice
-    //   await orderBook.connect(user1).createLimitOrder(lowPrice, qty, currentBlock.timestamp + 3600, OrderType.SELL);
-    //   await ethers.provider.send("evm_increaseTime", [5]);
-    //   await ethers.provider.send("evm_mine", []);
-    //   await orderBook.connect(user2).createLimitOrder(lowPrice, qty, currentBlock.timestamp + 3600, OrderType.SELL);
-    //   await ethers.provider.send("evm_increaseTime", [5]);
-    //   await ethers.provider.send("evm_mine", []);
-    //   await orderBook.connect(user3).createLimitOrder(highPrice, qty, currentBlock.timestamp + 3600, OrderType.SELL);
-
-    //   // BUY market order for enough MATIC to fill ~200 tokens @ lowPrice
-    //   const totalMatic = qty.mul(lowPrice).mul(2).div(parseEther("1")); // fill 2 lowest
-    //   const buffer = parseEther("0.01");
-    //   await orderBook.connect(treasury).createBuyMarketOrder({ value: totalMatic.add(buffer) });
-
-    //   const user3Orders = await orderBook.getOrdersByUser(user3.address);
-    //   const highPriceOrder = user3Orders[1]; // should be second
-    //   expect(highPriceOrder.desiredPrice).to.equal(highPrice);
-    //   expect(highPriceOrder.remainQuantity).to.equal(qty);
-    //   expect(highPriceOrder.isFilled).to.be.false;
-
-    //   console.log("High-price order untouched as expected.");
-    // });
   });
+
 
 })
