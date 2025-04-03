@@ -30,7 +30,7 @@ describe("Order book test", () => {
         ethers.utils.parseEther("100"),
         currentBlock.timestamp + 3600,
         OrderType.BUY
-      )).to.be.revertedWith("Invalid matic amount");
+      )).to.be.revertedWith("MATIC not required for sell order");
     });
 
     it("Create Sell limit order - should be reverted with some matic amount", async () => {
@@ -45,7 +45,7 @@ describe("Order book test", () => {
         {
           value: ethers.utils.parseEther("0.1")
         }
-      )).to.be.revertedWith("Invalid matic amount for createLimitSellOrder");
+      )).to.be.revertedWith("MATIC not required for sell orders");
     });
 
     it("Create Limit Order - should be reverted with invalid time force value", async () => {
@@ -290,4 +290,91 @@ describe("Order book test", () => {
       console.log("Sells: ", await orderBook.orderBook(10, OrderType.SELL))
     })
   });
+
+  describe("Time-based weighted distribution", () => {
+    it("should distribute tokens based on order age when selling tokens", async () => {
+      const { orderBook, token, user1, user2, sellTrader } = await loadFixture(basicFixture);
+      const block = await ethers.provider.getBlock("latest");
+
+      // user1 places older buy order
+      await orderBook.connect(user1).createLimitOrder(
+        parseEther("0.1"),
+        parseEther("100"),
+        block.timestamp + 3600,
+        OrderType.BUY,
+        { value: parseEther("10") }
+      );
+
+      // Wait 5 seconds
+      await ethers.provider.send("evm_increaseTime", [5]);
+      await ethers.provider.send("evm_mine", []);
+
+      // user2 places newer buy order
+      await orderBook.connect(user2).createLimitOrder(
+        parseEther("0.1"),
+        parseEther("100"),
+        block.timestamp + 3600,
+        OrderType.BUY,
+        { value: parseEther("10") }
+      );
+
+      const before1 = await token.balanceOf(user1.address);
+      const before2 = await token.balanceOf(user2.address);
+
+      // sellTrader executes market sell for 100 tokens
+      await orderBook.connect(sellTrader).createSellMarketOrder(parseEther("100"));
+
+      const after1 = await token.balanceOf(user1.address);
+      const after2 = await token.balanceOf(user2.address);
+
+      const user1Received = after1.sub(before1);
+      const user2Received = after2.sub(before2);
+
+      // user1's older order should get more tokens than user2
+      expect(user1Received).to.be.gt(user2Received);
+    });
+
+    it("should distribute MATIC based on order age when buying tokens", async () => {
+      const { orderBook, token, user1, user2, buyTrader } = await loadFixture(basicFixture);
+      const block = await ethers.provider.getBlock("latest");
+  
+      // Older sell order by user1
+      await orderBook.connect(user1).createLimitOrder(
+        parseEther("0.1"),          // price
+        parseEther("1"),            // quantity (safe)
+        block.timestamp + 3600,
+        OrderType.SELL
+      );
+  
+      await ethers.provider.send("evm_increaseTime", [5]);
+      await ethers.provider.send("evm_mine", []);
+  
+      // Newer sell order by user2
+      await orderBook.connect(user2).createLimitOrder(
+        parseEther("0.1"),
+        parseEther("1"),
+        block.timestamp + 3600,
+        OrderType.SELL
+      );
+  
+      const before1 = await ethers.provider.getBalance(user1.address);
+      const before2 = await ethers.provider.getBalance(user2.address);
+  
+      await orderBook.connect(buyTrader).createBuyMarketOrder({
+        value: parseEther("0.2")
+      });
+  
+      const after1 = await ethers.provider.getBalance(user1.address);
+      const after2 = await ethers.provider.getBalance(user2.address);
+  
+      const received1 = after1.sub(before1);
+      const received2 = after2.sub(before2);
+  
+      console.log("User1 MATIC received:", ethers.utils.formatEther(received1));
+      console.log("User2 MATIC received:", ethers.utils.formatEther(received2));
+  
+      expect(received1).to.be.gt(received2);
+    });
+
+  })
 })
