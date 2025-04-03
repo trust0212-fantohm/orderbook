@@ -335,85 +335,92 @@ contract OrderBook is
             : activeBuyOrders;
 
         uint256 remainingVolume = volume;
-
-        // Track unique price levels already processed
-        mapping(uint256 => bool) processedPrices;
+        uint256 lastProcessedPrice = type(uint256).max;
 
         for (uint256 i = orders.length; i > 0; i--) {
             Order storage refOrder = orders[i - 1];
             uint256 price = refOrder.desiredPrice;
 
-            // Skip if already processed this price
-            if (processedPrices[price]) continue;
-            processedPrices[price] = true;
+            if (price == lastProcessedPrice) continue;
+            lastProcessedPrice = price;
 
-            // Collect orders at same price
-            uint256 count = 0;
-            for (uint256 j = 0; j < orders.length; j++) {
-                if (orders[j].desiredPrice == price) count++;
-            }
-            if (count == 0) continue;
-
+            // Get weights for current price level
             (uint256[] memory weights, uint256 totalWeight) = getOrderWeights(
                 orders,
                 price
             );
             if (totalWeight == 0) continue;
 
-            uint256 priceVolume = remainingVolume;
-
             for (uint256 j = 0; j < orders.length; ) {
                 Order storage o = orders[j];
 
-                if (o.desiredPrice != price || priceVolume == 0) {
+                if (o.desiredPrice != price || remainingVolume == 0) {
                     j++;
                     continue;
                 }
 
-                uint256 weightedVolume = (volume * weights[j]) / totalWeight;
+                uint256 weightedVolume = (remainingVolume * weights[j]) /
+                    totalWeight;
+
+                if (weightedVolume == 0) {
+                    j++;
+                    continue;
+                }
 
                 if (orderType == OrderType.BUY) {
-                    // Convert MATIC to tokens
+                    // BUY market order, match SELL limit order
                     uint256 tokenAmount = (weightedVolume *
                         10 ** price_decimals) / o.desiredPrice;
 
                     if (tokenAmount >= o.remainQuantity) {
                         uint256 maticToPay = (o.remainQuantity *
                             o.desiredPrice) / 10 ** price_decimals;
+
                         handleTrade(orderType, o, maticToPay);
-                        priceVolume -= maticToPay;
+                        remainingVolume -= maticToPay;
+
                         o.remainQuantity = 0;
                         o.isFilled = true;
+                        o.lastTradeTimestamp = block.timestamp;
+
                         fullfilledOrders.push(o);
                         removeOrder(orders, j);
                         continue;
                     } else {
                         uint256 maticUsed = weightedVolume;
+
                         handleTrade(orderType, o, maticUsed);
-                        priceVolume -= maticUsed;
+                        remainingVolume -= maticUsed;
+
                         o.remainQuantity -= tokenAmount;
+                        o.lastTradeTimestamp = block.timestamp;
                     }
                 } else {
-                    // Token Sale
+                    // SELL market order, match BUY limit order
                     if (weightedVolume >= o.remainQuantity) {
                         handleTrade(orderType, o, o.remainQuantity);
-                        priceVolume -= o.remainQuantity;
+                        remainingVolume -= o.remainQuantity;
+
                         o.remainQuantity = 0;
                         o.isFilled = true;
+                        o.lastTradeTimestamp = block.timestamp;
+
                         fullfilledOrders.push(o);
                         removeOrder(orders, j);
                         continue;
                     } else {
                         handleTrade(orderType, o, weightedVolume);
-                        priceVolume -= weightedVolume;
+                        remainingVolume -= weightedVolume;
+
                         o.remainQuantity -= weightedVolume;
+                        o.lastTradeTimestamp = block.timestamp;
                     }
                 }
 
                 j++;
             }
 
-            if (priceVolume == 0) break;
+            if (remainingVolume == 0) break;
         }
 
         require(remainingVolume == 0, "Insufficient market depth");
@@ -429,12 +436,24 @@ contract OrderBook is
     ) internal {
         if (orderType == OrderType.BUY) {
             // MATIC to seller, tokens to buyer
+            require(
+                order.remainMaticValue >= tradeValue,
+                "Order has insufficient MATIC"
+            );
+
             (uint256 realMatic, uint256 maticFee) = getAmountDeductFee(
                 tradeValue,
                 OrderType.SELL
             );
-            payable(order.trader).transfer(realMatic);
-            payable(treasury).transfer(maticFee);
+
+            order.remainMaticValue -= tradeValue;
+
+            if (realMatic > 0) {
+                payable(order.trader).transfer(realMatic);
+            }
+            if (maticFee > 0) {
+                payable(treasury).transfer(maticFee);
+            }
 
             // Convert MATIC to tokens
             uint256 tokenAmount = (tradeValue * 10 ** price_decimals) /
@@ -706,23 +725,27 @@ contract OrderBook is
                 return (OrderType.SELL, i);
             }
         }
+
         revert("Invalid Id");
     }
 
     function setbuyFeeBips(uint256 _buyFeeBips) external onlyOwner {
         require(buyFeeBips != _buyFeeBips, "Same buyFeeBips");
         require(_buyFeeBips < BASE_BIPS, "Invalid buyFeeBips");
+
         buyFeeBips = _buyFeeBips;
     }
 
     function setsellFeeBips(uint256 _sellFeeBips) external onlyOwner {
         require(sellFeeBips != _sellFeeBips, "Invalid sellFeeBips");
         require(_sellFeeBips < BASE_BIPS, "Invalid sellFeeBips");
+
         sellFeeBips = _sellFeeBips;
     }
 
     function setTreasury(address _treasury) external onlyOwner {
         require(_treasury != address(0), "Invalid address");
+        
         treasury = _treasury;
     }
 
