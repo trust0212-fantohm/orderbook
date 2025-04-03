@@ -6,9 +6,7 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-
 import {IOrderBook} from "./interfaces/IOrderBook.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 
@@ -157,19 +155,17 @@ contract OrderBook is
         uint256 totalWeight,
         uint256 nowTime
     ) internal returns (uint256 tokenFilled, uint256 maticUsed) {
-        for (
-            uint256 k = start;
-            k < end && marketOrderMem.remainMaticValue > 0;
-            k++
-        ) {
+        uint256 remainMaticValue = marketOrderMem.remainMaticValue;
+        uint256 remainTotalWeight = totalWeight;
+        for (uint256 k = start; k < end && remainMaticValue > 0; k++) {
             Order storage sellOrder = activeSellOrders[k];
             if (isInvalidOrder(sellOrder)) continue;
 
             uint256 weight = nowTime - sellOrder.createdAt;
             if (weight == 0) weight = 1;
 
-            uint256 maticShare = (marketOrderMem.remainMaticValue * weight) /
-                totalWeight;
+            uint256 maticShare = (remainMaticValue * weight) /
+                remainTotalWeight;
 
             uint256 tokenQty = (maticShare * 10 ** price_decimals) /
                 currentPrice;
@@ -194,6 +190,8 @@ contract OrderBook is
 
             tokenFilled += tokenQty;
             maticUsed += maticShare;
+            remainTotalWeight -= weight;
+            remainMaticValue -= maticShare;
         }
     }
 
@@ -376,8 +374,8 @@ contract OrderBook is
 
         if (orderType == OrderType.BUY) {
             require(
-                msg.value == (desiredPrice * quantity) / 10 ** price_decimals,
-                "MATIC not required for sell order"
+                msg.value == (desiredPrice * quantity) / (10 ** price_decimals),
+                "Incorrect MATIC sent for BUY order"
             );
         } else {
             require(msg.value == 0, "MATIC not required for sell orders");
@@ -508,8 +506,9 @@ contract OrderBook is
                     }
                 }
 
+                // Time-weighted distribution
                 (
-                    uint256 maticFilled,
+                    ,
                     uint256 quantityFilled
                 ) = distributeSellOrderAcrossPriceLevel(
                         newOrder,
@@ -521,11 +520,12 @@ contract OrderBook is
                     );
 
                 newOrder.remainQuantity -= quantityFilled;
-                newOrder.remainMaticValue -= maticFilled;
+                // newOrder.remainMaticValue -= maticFilled;
 
                 i = j;
             }
 
+            // If partially filled, insert the rest
             if (newOrder.remainQuantity > 0) {
                 insertSellLimitOrder(newOrder);
             } else {
