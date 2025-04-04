@@ -22,7 +22,7 @@ contract Oracle is AccessControl, IOracle {
     mapping(uint256 => uint256) public allTimestamps;
 
     uint256 public roundLength = 0;
-    uint8 public decimals;
+    // uint8 public decimals;
     Round public latestRoundData;
 
     /// @dev flag for initializing, default false.
@@ -40,7 +40,7 @@ contract Oracle is AccessControl, IOracle {
         uint256 indexed timestamp,
         uint256 price
     );
-    event DecimalChanged(uint8 decimals);
+    // event DecimalChanged(uint8 decimals);
 
     modifier onlyAdmin() {
         require(isAdmin(msg.sender), "NOT_ORACLE_ADMIN");
@@ -52,9 +52,9 @@ contract Oracle is AccessControl, IOracle {
         _;
     }
 
-    constructor(string memory _pairName, uint8 _decimals) {
+    constructor(string memory _pairName) {
         pairName = _pairName;
-        decimals = _decimals;
+        // decimals = _decimals;
 
         _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _setupRole(WRITER_ROLE, msg.sender);
@@ -104,11 +104,11 @@ contract Oracle is AccessControl, IOracle {
 
     /// @dev set decimals
     /// @param _decimals decimals
-    function setDecimals(uint8 _decimals) external onlyAdmin {
-        decimals = _decimals;
+    // function setDecimals(uint8 _decimals) external onlyAdmin {
+    //     decimals = _decimals;
 
-        emit DecimalChanged(decimals);
-    }
+    //     emit DecimalChanged(decimals);
+    // }
 
     /// @notice Internal function that records a new price round
     /// @param timestamp Timestamp should be greater than last round's time, and less then current time.

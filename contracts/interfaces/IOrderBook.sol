@@ -10,25 +10,25 @@ interface IOrderBook {
 
     struct Order {
         uint256 id;
-        address trader; // action performer
-        OrderType orderType; // BUY/SELL
-        uint256 desiredPrice; // desired token ($ACME) price for trade. This is for limit order
-        uint256 quantity; // token amount to trade.
-        uint256 remainQuantity; // actual remain token amount
-        uint256 maticValue; // matic amount to purchase token. This is available for buy market order only
-        uint256 remainMaticValue; // remain matic amount. This is available for buy market order only
+        address trader;
+        OrderType orderType;
+        uint256 desiredPrice; // desired token price for trade(Limit order Only)
+        uint256 tokenAmount; // token amount to trade.
+        uint256 remainTokenAmount; // remaining token amount
+        uint256 usdcAmount; // usdc amount to purchase token(Buy order only)
+        uint256 remainUsdcAmount; // remaining usdc amount(Buy order only)
         bool isFilled;
         bool isMarketOrder;
         bool isCanceled;
-        uint256 timeInForce; //
+        uint256 timeInForce;
         uint256 lastTradeTimestamp;
         uint256 createdAt;
     }
 
     struct RecentOrder {
         uint256 dollars;
-        uint256 maticValue;
-        uint256 amount;
+        uint256 usdcAmount;
+        uint256 tokenAmount;
     }
 
     event TradeExecuted(
@@ -37,7 +37,7 @@ interface IOrderBook {
         address indexed buyer,
         address seller,
         uint256 price,
-        uint256 quantity
+        uint256 tokenAmount
     );
 
     event OrderReverted(uint256 indexed orderId, address indexed trader);
@@ -47,7 +47,7 @@ interface IOrderBook {
         address indexed trader,
         OrderType orderType,
         uint256 desiredPrice,
-        uint256 quantity,
+        uint256 tokenAmount,
         uint256 timeInForce,
         bool isMarket
     );
