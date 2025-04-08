@@ -105,7 +105,7 @@ contract OrderBook is
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
-                Order storage o = activeSellOrders[k];
+                Order memory o = activeSellOrders[k];
                 if (!isInvalidOrder(o)) {
                     uint256 w = nowTime - o.createdAt;
                     if (w == 0) w = 1;
@@ -255,7 +255,7 @@ contract OrderBook is
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
-                Order storage o = activeBuyOrders[k];
+                Order memory o = activeBuyOrders[k];
                 if (!isInvalidOrder(o)) {
                     uint256 w = nowTime - o.createdAt;
                     if (w == 0) w = 1;
@@ -266,7 +266,7 @@ contract OrderBook is
             // Apply time-weighted matching
             (
                 uint256 usdcFilled,
-                uint256 quantityFilled
+                uint256 tokenAmountFilled
             ) = distributeSellOrderAcrossPriceLevel(
                     marketOrder,
                     currentPrice,
@@ -277,7 +277,7 @@ contract OrderBook is
                 );
 
             totalUsdc += usdcFilled;
-            marketOrder.remainTokenAmount -= quantityFilled;
+            marketOrder.remainTokenAmount -= tokenAmountFilled;
 
             i = start;
         }
@@ -306,7 +306,7 @@ contract OrderBook is
         uint256 end,
         uint256 totalWeight,
         uint256 nowTime
-    ) internal returns (uint256 usdcFilled, uint256 quantityFilled) {
+    ) internal returns (uint256 usdcFilled, uint256 tokenAmountFilled) {
         uint256 remainTokenAmount = marketOrderMem.remainTokenAmount;
         uint256 remainTotalWeight = totalWeight;
 
@@ -349,7 +349,7 @@ contract OrderBook is
             }
 
             usdcFilled += usdcAmount;
-            quantityFilled += share;
+            tokenAmountFilled += share;
 
             remainTotalWeight -= weight;
             remainTokenAmount -= share;
@@ -449,7 +449,7 @@ contract OrderBook is
                 // Weight calc
                 uint256 totalWeight = 0;
                 for (uint256 k = j; k < i; k++) {
-                    Order storage o = activeSellOrders[k];
+                    Order memory o = activeSellOrders[k];
                     if (!isInvalidOrder(o)) {
                         uint256 w = nowTime - o.createdAt;
                         if (w == 0) w = 1;
@@ -508,7 +508,7 @@ contract OrderBook is
 
                 uint256 totalWeight = 0;
                 for (uint256 k = j; k < i; k++) {
-                    Order storage o = activeBuyOrders[k];
+                    Order memory o = activeBuyOrders[k];
                     if (!isInvalidOrder(o)) {
                         uint256 w = nowTime - o.createdAt;
                         if (w == 0) w = 1;
@@ -519,7 +519,7 @@ contract OrderBook is
                 // Time-weighted distribution
                 (
                     ,
-                    uint256 quantityFilled
+                    uint256 tokenAmountFilled
                 ) = distributeSellOrderAcrossPriceLevel(
                         newOrder,
                         currentPrice,
@@ -529,7 +529,7 @@ contract OrderBook is
                         nowTime
                     );
 
-                newOrder.remainTokenAmount -= quantityFilled;
+                newOrder.remainTokenAmount -= tokenAmountFilled;
                 // newOrder.remainUsdcAmount -= usdcFilled;
 
                 i = j;
@@ -579,73 +579,6 @@ contract OrderBook is
         }
 
         activeSellOrders[i] = newLimitSellOrder;
-    }
-
-    // We execute matched buy and sell orders one by one
-    // This is called whenever new limit order is created, or can be called from backend intervally
-    function executeLimitOrders() public nonReentrant {
-        // clean
-        cleanLimitOrders();
-        require(
-            activeBuyOrders.length > 0 && activeSellOrders.length > 0,
-            "No Sell or Buy limit orders exist"
-        );
-
-        Order storage buyOrder = activeBuyOrders[activeBuyOrders.length - 1];
-        Order storage sellOrder = activeSellOrders[activeSellOrders.length - 1];
-
-        if (buyOrder.desiredPrice >= sellOrder.desiredPrice) {
-            // we only execute orders when buy price is higher or equal than sell price
-            uint256 tokenAmount = buyOrder.remainTokenAmount >=
-                sellOrder.remainTokenAmount
-                ? sellOrder.remainTokenAmount
-                : buyOrder.remainTokenAmount;
-
-            uint256 sellerDesiredUsdcAmount = (sellOrder.desiredPrice *
-                tokenAmount) / 10 ** price_decimals;
-
-            // send usdc to seller
-            (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
-                sellerDesiredUsdcAmount,
-                OrderType.SELL
-            );
-            usdc.safeTransfer(sellOrder.trader, realAmount);
-            usdc.safeTransfer(treasury, feeAmount);
-
-            // decrease remain usdc amount
-            buyOrder.remainUsdcAmount -= sellerDesiredUsdcAmount;
-            buyOrder.remainTokenAmount -= tokenAmount;
-            buyOrder.lastTradeTimestamp = block.timestamp;
-
-            (uint256 _realAmount, uint256 _feeAmount) = getAmountDeductFee(
-                tokenAmount,
-                OrderType.BUY
-            );
-            token.safeTransfer(buyOrder.trader, _realAmount);
-            token.safeTransfer(treasury, _feeAmount);
-
-            sellOrder.remainTokenAmount -= tokenAmount;
-            sellOrder.lastTradeTimestamp = block.timestamp;
-
-            if (buyOrder.remainTokenAmount == 0) {
-                buyOrder.isFilled = true;
-                if (buyOrder.remainUsdcAmount > 0) {
-                    // refund
-                    usdc.safeTransfer(
-                        buyOrder.trader,
-                        buyOrder.remainUsdcAmount
-                    );
-                    buyOrder.remainUsdcAmount = 0;
-                }
-                // fullfilledOrders.push(buyOrder);
-                removeLastFromBuyLimitOrder();
-            }
-            if (sellOrder.remainTokenAmount == 0) {
-                sellOrder.isFilled = true;
-                // fullfilledOrders.push(sellOrder);
-                removeLastFromSellLimitOrder();
-            }
-        }
     }
 
     function isInvalidOrder(Order memory order) public view returns (bool) {
