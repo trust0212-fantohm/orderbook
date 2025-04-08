@@ -368,7 +368,7 @@ contract OrderBook is
     function createLimitOrder(
         uint256 desiredPrice,
         uint256 tokenAmount,
-        uint256 timeInForce,
+        uint256 validTo,
         OrderType orderType
     ) external nonReentrant {
         uint256 usdcAmount = (desiredPrice * tokenAmount) /
@@ -389,7 +389,7 @@ contract OrderBook is
                 false,
                 false,
                 false,
-                timeInForce,
+                validTo,
                 0,
                 block.timestamp
             );
@@ -407,13 +407,13 @@ contract OrderBook is
                 false,
                 false,
                 false,
-                timeInForce,
+                validTo,
                 0,
                 block.timestamp
             );
         }
 
-        require(timeInForce > block.timestamp, "Invalid time limit");
+        require(validTo > block.timestamp, "Invalid time limit");
 
         nonce++;
 
@@ -652,7 +652,7 @@ contract OrderBook is
         return
             order.isCanceled ||
             order.isFilled ||
-            order.timeInForce < block.timestamp ||
+            order.validTo < block.timestamp ||
             order.remainTokenAmount == 0;
     }
 

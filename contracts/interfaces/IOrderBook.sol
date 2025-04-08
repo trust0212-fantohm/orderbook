@@ -20,7 +20,7 @@ interface IOrderBook {
         bool isFilled;
         bool isMarketOrder;
         bool isCanceled;
-        uint256 timeInForce;
+        uint256 validTo;
         uint256 lastTradeTimestamp;
         uint256 createdAt;
     }
