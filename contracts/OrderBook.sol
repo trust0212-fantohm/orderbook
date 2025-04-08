@@ -30,12 +30,12 @@ contract OrderBook is
     uint256 public nonce;
     uint256 public buyFeeBips;
     uint256 public sellFeeBips;
-    
+
     address public treasury;
 
-    mapping(uint256 => Order) public orders; // Maps order ID to Order struct
-    mapping(address => uint256[]) private ordersByUser; // Tracks order IDs by user
     mapping(OrderType => uint256[]) public activeOrderIds; // Tracks active order IDs by type
+    mapping(uint256 => Order) public orders; // Maps order ID to Order struct
+    mapping(address => uint256[]) public ordersByUser; // Tracks order IDs by user
 
     function initialize(
         address _usdcAddress,
