@@ -18,22 +18,24 @@ contract OrderBook is
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
-    Order[] public activeBuyOrders;
-    Order[] public activeSellOrders;
-    Order[] public fullfilledOrders;
+    uint256[] public fulfilledOrderIds;
 
     IERC20Upgradeable public usdc;
     IERC20Upgradeable public token;
     IOracle public priceOracle; // token-usdc price oracle
 
-    uint256 public nonce;
     uint256 private constant BASE_BIPS = 10000;
+    uint256 private constant price_decimals = 18;
+
+    uint256 public nonce;
     uint256 public buyFeeBips;
     uint256 public sellFeeBips;
-    uint256 private constant price_decimals = 18;
+    
     address public treasury;
 
-    mapping(address => uint256) public orderCountByUser; // Add Count
+    mapping(uint256 => Order) public orders; // Maps order ID to Order struct
+    mapping(address => uint256[]) private ordersByUser; // Tracks order IDs by user
+    mapping(OrderType => uint256[]) public activeOrderIds; // Tracks active order IDs by type
 
     function initialize(
         address _usdcAddress,
@@ -80,21 +82,21 @@ contract OrderBook is
 
         nonce++;
 
-        require(activeSellOrders.length > 0, "No active sell orders");
+        require(activeOrderIds[OrderType.SELL].length > 0, "No active sell orders");
 
         uint256 totalTokens = 0;
         uint256 nowTime = block.timestamp;
 
         for (
-            uint256 i = activeSellOrders.length;
+            uint256 i = activeOrderIds[OrderType.SELL].length;
             i > 0 && marketOrder.remainUsdcAmount > 0;
 
         ) {
-            uint256 currentPrice = activeSellOrders[i - 1].desiredPrice;
+            uint256 currentPrice = orders[activeOrderIds[OrderType.SELL][i - 1]].desiredPrice;
             uint256 j = i;
 
             while (
-                j > 0 && activeSellOrders[j - 1].desiredPrice == currentPrice
+                j > 0 && orders[activeOrderIds[OrderType.SELL][j - 1]].desiredPrice == currentPrice
             ) {
                 j--;
             }
@@ -105,7 +107,7 @@ contract OrderBook is
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
-                Order memory o = activeSellOrders[k];
+                Order memory o = orders[activeOrderIds[OrderType.SELL][k]];
                 if (!isInvalidOrder(o)) {
                     uint256 w = nowTime - o.createdAt;
                     if (w == 0) w = 1;
@@ -136,7 +138,9 @@ contract OrderBook is
             revert("Insufficient Token Supply");
         }
 
-        fullfilledOrders.push(marketOrder);
+        orders[nonce] = marketOrder;
+        fulfilledOrderIds.push(nonce);
+        ordersByUser[msg.sender].push(nonce);
         cleanLimitOrders();
 
         (uint256 _realAmount, uint256 _feeAmount) = getAmountDeductFee(
@@ -145,8 +149,6 @@ contract OrderBook is
         );
         token.safeTransfer(msg.sender, _realAmount);
         token.safeTransfer(treasury, _feeAmount);
-
-        orderCountByUser[msg.sender]++;
     }
 
     function distributeBuyOrderAcrossPriceLevel(
@@ -161,7 +163,7 @@ contract OrderBook is
         uint256 remainTotalWeight = totalWeight;
 
         for (uint256 k = start; k < end && remainUsdcAmount > 0; k++) {
-            Order storage sellOrder = activeSellOrders[k];
+            Order storage sellOrder = orders[activeOrderIds[OrderType.SELL][k]];
             if (isInvalidOrder(sellOrder)) continue;
 
             uint256 weight = nowTime - sellOrder.createdAt;
@@ -198,9 +200,9 @@ contract OrderBook is
     }
 
     function removeLastFromSellLimitOrder() internal {
-        Order memory lastOrder = activeSellOrders[activeSellOrders.length - 1];
-        activeSellOrders.pop();
-        fullfilledOrders.push(lastOrder);
+        uint256 lastOrderId = activeOrderIds[OrderType.SELL][activeOrderIds[OrderType.SELL].length - 1];
+        activeOrderIds[OrderType.SELL].pop();
+        fulfilledOrderIds.push(lastOrderId);
     }
 
     /**
@@ -230,21 +232,21 @@ contract OrderBook is
 
         nonce++;
 
-        require(activeBuyOrders.length > 0, "No active buy orders");
+        require(activeOrderIds[OrderType.BUY].length > 0, "No active buy orders");
 
         uint256 totalUsdc = 0;
         uint256 nowTime = block.timestamp;
 
         for (
-            uint256 i = activeBuyOrders.length;
+            uint256 i = activeOrderIds[OrderType.BUY].length;
             i > 0 && marketOrder.remainTokenAmount > 0;
 
         ) {
-            uint256 currentPrice = activeBuyOrders[i - 1].desiredPrice;
+            uint256 currentPrice = orders[activeOrderIds[OrderType.BUY][i - 1]].desiredPrice;
             uint256 j = i;
 
             while (
-                j > 0 && activeBuyOrders[j - 1].desiredPrice == currentPrice
+                j > 0 && orders[activeOrderIds[OrderType.BUY][j - 1]].desiredPrice == currentPrice
             ) {
                 j--;
             }
@@ -255,7 +257,7 @@ contract OrderBook is
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
-                Order memory o = activeBuyOrders[k];
+                Order memory o = orders[activeOrderIds[OrderType.BUY][k]];
                 if (!isInvalidOrder(o)) {
                     uint256 w = nowTime - o.createdAt;
                     if (w == 0) w = 1;
@@ -286,7 +288,9 @@ contract OrderBook is
             revert("Insufficient USDC supply");
         }
 
-        fullfilledOrders.push(marketOrder);
+        orders[nonce] = marketOrder;
+        fulfilledOrderIds.push(nonce);
+        ordersByUser[msg.sender].push(nonce);
         cleanLimitOrders();
 
         (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
@@ -295,8 +299,6 @@ contract OrderBook is
         );
         usdc.safeTransfer(marketOrder.trader, realAmount);
         usdc.safeTransfer(treasury, feeAmount);
-
-        orderCountByUser[msg.sender]++;
     }
 
     function distributeSellOrderAcrossPriceLevel(
@@ -315,7 +317,7 @@ contract OrderBook is
             k < end && remainTokenAmount > 0;
             k++
         ) {
-            Order storage buyOrder = activeBuyOrders[k];
+            Order storage buyOrder = orders[activeOrderIds[OrderType.BUY][k]];
             if (isInvalidOrder(buyOrder)) continue;
 
             uint256 weight = nowTime - buyOrder.createdAt;
@@ -357,9 +359,9 @@ contract OrderBook is
     }
 
     function removeLastFromBuyLimitOrder() internal {
-        Order memory lastOrder = activeBuyOrders[activeBuyOrders.length - 1];
-        activeBuyOrders.pop();
-        fullfilledOrders.push(lastOrder);
+        uint256 lastOrderId = activeOrderIds[OrderType.BUY][activeOrderIds[OrderType.BUY].length - 1];
+        activeOrderIds[OrderType.BUY].pop();
+        fulfilledOrderIds.push(lastOrderId);
     }
 
     /**
@@ -423,11 +425,12 @@ contract OrderBook is
         if (orderType == OrderType.BUY) {
             // match with lowest priced sells ≤ desiredPrice
             for (
-                uint256 i = activeSellOrders.length;
+                uint256 i = activeOrderIds[OrderType.SELL].length;
                 i > 0 && newOrder.remainTokenAmount > 0;
 
             ) {
-                Order storage sellOrder = activeSellOrders[i - 1];
+                uint256 currentOrderId = activeOrderIds[OrderType.SELL][i - 1];
+                Order storage sellOrder = orders[currentOrderId];
                 if (
                     isInvalidOrder(sellOrder) ||
                     sellOrder.desiredPrice > desiredPrice
@@ -441,7 +444,7 @@ contract OrderBook is
                 uint256 j = i;
                 while (
                     j > 0 &&
-                    activeSellOrders[j - 1].desiredPrice == currentPrice
+                    orders[activeOrderIds[OrderType.SELL][j - 1]].desiredPrice == currentPrice
                 ) {
                     j--;
                 }
@@ -449,7 +452,7 @@ contract OrderBook is
                 // Weight calc
                 uint256 totalWeight = 0;
                 for (uint256 k = j; k < i; k++) {
-                    Order memory o = activeSellOrders[k];
+                    Order memory o = orders[activeOrderIds[OrderType.SELL][k]];
                     if (!isInvalidOrder(o)) {
                         uint256 w = nowTime - o.createdAt;
                         if (w == 0) w = 1;
@@ -478,18 +481,20 @@ contract OrderBook is
 
             // If partially filled, insert the rest
             if (newOrder.remainTokenAmount > 0) {
-                insertBuyLimitOrder(newOrder);
+                insertBuyLimitOrder(nonce);
             } else {
-                fullfilledOrders.push(newOrder);
+                orders[nonce] = newOrder;
+                fulfilledOrderIds.push(nonce);
             }
         } else {
             // SELL order — match with highest priced buys ≥ desiredPrice
             for (
-                uint256 i = activeBuyOrders.length;
+                uint256 i = activeOrderIds[OrderType.BUY].length;
                 i > 0 && newOrder.remainTokenAmount > 0;
 
             ) {
-                Order storage buyOrder = activeBuyOrders[i - 1];
+                uint256 currentOrderId = activeOrderIds[OrderType.BUY][i - 1];
+                Order storage buyOrder = orders[currentOrderId];
                 if (
                     isInvalidOrder(buyOrder) ||
                     buyOrder.desiredPrice < desiredPrice
@@ -501,14 +506,14 @@ contract OrderBook is
                 uint256 currentPrice = buyOrder.desiredPrice;
                 uint256 j = i;
                 while (
-                    j > 0 && activeBuyOrders[j - 1].desiredPrice == currentPrice
+                    j > 0 && orders[activeOrderIds[OrderType.BUY][j - 1]].desiredPrice == currentPrice
                 ) {
                     j--;
                 }
 
                 uint256 totalWeight = 0;
                 for (uint256 k = j; k < i; k++) {
-                    Order memory o = activeBuyOrders[k];
+                    Order memory o = orders[activeOrderIds[OrderType.BUY][k]];
                     if (!isInvalidOrder(o)) {
                         uint256 w = nowTime - o.createdAt;
                         if (w == 0) w = 1;
@@ -537,48 +542,50 @@ contract OrderBook is
 
             // If partially filled, insert the rest
             if (newOrder.remainTokenAmount > 0) {
-                insertSellLimitOrder(newOrder);
+                insertSellLimitOrder(nonce);
             } else {
-                fullfilledOrders.push(newOrder);
+                orders[nonce] = newOrder;
+                fulfilledOrderIds.push(nonce);
             }
         }
 
+        orders[nonce] = newOrder;
+        ordersByUser[msg.sender].push(nonce);
         cleanLimitOrders();
-        orderCountByUser[msg.sender]++;
     }
 
-    // Sort ASC [0, 1, 2, ...]
-    function insertBuyLimitOrder(Order memory newLimitBuyOrder) internal {
-        uint256 i = activeBuyOrders.length;
+    function insertBuyLimitOrder(uint256 orderId) internal {
+        Order memory newLimitBuyOrder = orders[orderId];
+        uint256 i = activeOrderIds[OrderType.BUY].length;
 
-        activeBuyOrders.push(newLimitBuyOrder);
+        activeOrderIds[OrderType.BUY].push(orderId);
         while (
             i > 0 &&
-            activeBuyOrders[i - 1].desiredPrice > newLimitBuyOrder.desiredPrice
+            orders[activeOrderIds[OrderType.BUY][i - 1]].desiredPrice > newLimitBuyOrder.desiredPrice
         ) {
-            activeBuyOrders[i] = activeBuyOrders[i - 1];
+            activeOrderIds[OrderType.BUY][i] = activeOrderIds[OrderType.BUY][i - 1];
             i--;
         }
 
-        activeBuyOrders[i] = newLimitBuyOrder;
+        activeOrderIds[OrderType.BUY][i] = orderId;
     }
 
-    // Sort DESC [9, 8, ..., 1, 0]
-    function insertSellLimitOrder(Order memory newLimitSellOrder) internal {
-        uint256 i = activeSellOrders.length;
+    function insertSellLimitOrder(uint256 orderId) internal {
+        Order memory newLimitSellOrder = orders[orderId];
+        uint256 i = activeOrderIds[OrderType.SELL].length;
 
-        activeSellOrders.push(newLimitSellOrder);
+        activeOrderIds[OrderType.SELL].push(orderId);
 
         while (
             i > 0 &&
-            activeSellOrders[i - 1].desiredPrice <
+            orders[activeOrderIds[OrderType.SELL][i - 1]].desiredPrice <
             newLimitSellOrder.desiredPrice
         ) {
-            activeSellOrders[i] = activeSellOrders[i - 1];
+            activeOrderIds[OrderType.SELL][i] = activeOrderIds[OrderType.SELL][i - 1];
             i--;
         }
 
-        activeSellOrders[i] = newLimitSellOrder;
+        activeOrderIds[OrderType.SELL][i] = orderId;
     }
 
     function isInvalidOrder(Order memory order) public view returns (bool) {
@@ -591,14 +598,14 @@ contract OrderBook is
 
     function cleanLimitOrders() internal {
         while (
-            activeBuyOrders.length > 0 &&
-            isInvalidOrder(activeBuyOrders[activeBuyOrders.length - 1])
+            activeOrderIds[OrderType.BUY].length > 0 &&
+            isInvalidOrder(orders[activeOrderIds[OrderType.BUY][activeOrderIds[OrderType.BUY].length - 1]])
         ) {
             removeLastFromBuyLimitOrder();
         }
         while (
-            activeSellOrders.length > 0 &&
-            isInvalidOrder(activeSellOrders[activeSellOrders.length - 1])
+            activeOrderIds[OrderType.SELL].length > 0 &&
+            isInvalidOrder(orders[activeOrderIds[OrderType.SELL][activeOrderIds[OrderType.SELL].length - 1]])
         ) {
             removeLastFromSellLimitOrder();
         }
@@ -614,8 +621,8 @@ contract OrderBook is
     {
         (, uint256 price) = priceOracle.getLatestRoundData();
 
-        if (activeBuyOrders.length > 0) {
-            Order memory order = activeBuyOrders[activeBuyOrders.length - 1];
+        if (activeOrderIds[OrderType.BUY].length > 0) {
+            Order memory order = orders[activeOrderIds[OrderType.BUY][activeOrderIds[OrderType.BUY].length - 1]];
             bestBidOrder = RecentOrder(
                 price * order.desiredPrice,
                 order.desiredPrice,
@@ -623,8 +630,8 @@ contract OrderBook is
             );
         }
 
-        if (activeSellOrders.length > 0) {
-            Order memory order = activeSellOrders[activeSellOrders.length - 1];
+        if (activeOrderIds[OrderType.SELL].length > 0) {
+            Order memory order = orders[activeOrderIds[OrderType.SELL][activeOrderIds[OrderType.SELL].length - 1]];
             bestAskOrder = RecentOrder(
                 price * order.desiredPrice,
                 order.desiredPrice,
@@ -640,28 +647,22 @@ contract OrderBook is
         (, uint256 price) = priceOracle.getLatestRoundData();
         if (orderType == OrderType.BUY) {
             Order[] memory bestActiveBuyOrders = new Order[](depth);
-            if (depth >= activeBuyOrders.length) {
-                return (price, activeBuyOrders);
-            }
             for (
-                uint256 i = activeBuyOrders.length - 1;
-                i >= activeBuyOrders.length - depth;
+                uint256 i = activeOrderIds[OrderType.BUY].length - 1;
+                i >= activeOrderIds[OrderType.BUY].length - depth;
                 i--
             ) {
-                bestActiveBuyOrders[i] = activeBuyOrders[i];
+                bestActiveBuyOrders[i] = orders[activeOrderIds[OrderType.BUY][i]];
             }
             return (price, bestActiveBuyOrders);
         } else {
             Order[] memory bestActiveSellOrders = new Order[](depth);
-            if (depth >= activeSellOrders.length) {
-                return (price, activeSellOrders);
-            }
             for (
-                uint256 i = activeSellOrders.length - 1;
-                i >= activeSellOrders.length - depth;
+                uint256 i = activeOrderIds[OrderType.SELL].length - 1;
+                i >= activeOrderIds[OrderType.SELL].length - depth;
                 i--
             ) {
-                bestActiveSellOrders[i] = activeBuyOrders[i];
+                bestActiveSellOrders[i] = orders[activeOrderIds[OrderType.SELL][i]];
             }
             return (price, bestActiveSellOrders);
         }
@@ -669,100 +670,7 @@ contract OrderBook is
 
     function getOrderById(uint256 id) public view returns (Order memory) {
         require(id > 0 && id < nonce, "Invalid Id");
-        for (uint256 i = 0; i < activeBuyOrders.length; i++) {
-            Order memory order = activeBuyOrders[i];
-            if (id == order.id) {
-                return order;
-            }
-        }
-        for (uint256 i = 0; i < activeSellOrders.length; i++) {
-            Order memory order = activeSellOrders[i];
-            if (id == order.id) {
-                return order;
-            }
-        }
-        for (uint256 i = 0; i < fullfilledOrders.length; i++) {
-            Order memory order = fullfilledOrders[i];
-            if (id == order.id) {
-                return order;
-            }
-        }
-
-        revert("Invalid Order");
-    }
-
-    function getOrdersByUser(
-        address user
-    ) external view returns (Order[] memory, Order[] memory, Order[] memory) {
-        require(orderCountByUser[user] > 0, "User did not make any order");
-        Order[] memory activeBuyOrdersByUser = new Order[](
-            orderCountByUser[user]
-        );
-        uint256 k;
-        for (uint256 i = 0; i < activeBuyOrders.length; i++) {
-            Order memory order = activeBuyOrders[i];
-            if (user == order.trader) {
-                activeBuyOrdersByUser[k] = order;
-                k++;
-            }
-        }
-        uint256 toDrop1 = orderCountByUser[user] - k;
-        if (toDrop1 > 0) {
-            assembly {
-                mstore(
-                    activeBuyOrdersByUser,
-                    sub(mload(activeBuyOrdersByUser), toDrop1)
-                )
-            }
-        }
-        k = 0;
-
-        Order[] memory activeSellOrdersByUser = new Order[](
-            orderCountByUser[user]
-        );
-        for (uint256 i = 0; i < activeSellOrders.length; i++) {
-            Order memory order = activeSellOrders[i];
-            if (user == order.trader) {
-                activeSellOrdersByUser[k] = order;
-                k++;
-            }
-        }
-        uint256 toDrop2 = orderCountByUser[user] - k;
-        if (toDrop2 > 0) {
-            assembly {
-                mstore(
-                    activeSellOrdersByUser,
-                    sub(mload(activeSellOrdersByUser), toDrop2)
-                )
-            }
-        }
-        k = 0;
-
-        Order[] memory fullfilledOrdersByUser = new Order[](
-            orderCountByUser[user]
-        );
-        for (uint256 i = 0; i < fullfilledOrders.length; i++) {
-            Order memory order = fullfilledOrders[i];
-            if (user == order.trader) {
-                fullfilledOrdersByUser[k] = order;
-                k++;
-            }
-        }
-        uint256 toDrop3 = orderCountByUser[user] - k;
-        if (toDrop3 > 0) {
-            assembly {
-                mstore(
-                    fullfilledOrdersByUser,
-                    sub(mload(fullfilledOrdersByUser), toDrop3)
-                )
-            }
-        }
-
-        return (
-            activeBuyOrdersByUser,
-            activeSellOrdersByUser,
-            fullfilledOrdersByUser
-        );
+        return orders[id];
     }
 
     function cancelOrder(uint256 id) external returns (bool) {
@@ -770,8 +678,8 @@ contract OrderBook is
 
         (OrderType orderType, uint256 i) = getIndex(id);
         Order storage order = orderType == OrderType.BUY
-            ? activeBuyOrders[i]
-            : activeSellOrders[i];
+            ? orders[activeOrderIds[OrderType.BUY][i]]
+            : orders[activeOrderIds[OrderType.SELL][i]];
         require(order.trader == msg.sender, "Not owner of Order");
 
         order.isCanceled = true;
@@ -786,16 +694,14 @@ contract OrderBook is
     }
 
     function getIndex(uint256 id) public view returns (OrderType, uint256) {
-        for (uint256 i = 0; i < activeBuyOrders.length; i++) {
-            Order memory order = activeBuyOrders[i];
-            if (id == order.id) {
+        for (uint256 i = 0; i < activeOrderIds[OrderType.BUY].length; i++) {
+            if (id == activeOrderIds[OrderType.BUY][i]) {
                 return (OrderType.BUY, i);
             }
         }
 
-        for (uint256 i = 0; i < activeSellOrders.length; i++) {
-            Order memory order = activeSellOrders[i];
-            if (id == order.id) {
+        for (uint256 i = 0; i < activeOrderIds[OrderType.SELL].length; i++) {
+            if (id == activeOrderIds[OrderType.SELL][i]) {
                 return (OrderType.SELL, i);
             }
         }
