@@ -712,29 +712,50 @@ contract OrderBook is
         }
     }
 
-    function getOrderById(uint256 id) public view returns (Order memory) {
-        require(id > 0 && id < nonce, "Invalid Id");
-        return orders[id];
+    function _getOrderById(
+        uint256 orderId
+    ) private view returns (Order storage) {
+        Order storage order = orders[orderId];
+        require(order.id == orderId, "Order not found"); // Ensure order exists
+
+        return order;
     }
 
-    function cancelOrder(uint256 id) external returns (bool) {
-        require(id < nonce, "Invalid Id");
+    function getOrderById(
+        uint256 orderId
+    ) external view returns (Order memory) {
+        return _getOrderById(orderId);
+    }
 
-        (OrderType orderType, uint256 i) = getIndex(id);
-        Order storage order = orderType == OrderType.BUY
-            ? orders[activeOrderIds[OrderType.BUY][i]]
-            : orders[activeOrderIds[OrderType.SELL][i]];
-        require(order.trader == msg.sender, "Not owner of Order");
+    modifier onlyOrderMaker(uint256 orderId) {
+        require(orderId < nonce, "Invalid order id");
+        Order memory order = _getOrderById(orderId);
+        require(
+            order.trader == msg.sender,
+            "You are not an maker of this order"
+        );
+        _;
+    }
+
+    function cancelOrder(uint256 id) external onlyOrderMaker(id) {
+        Order storage order = _getOrderById(id);
+
+        require(
+            order.tokenAmount > 0 && order.usdcAmount > 0,
+            "Not a limit order"
+        );
+        require(!order.isCanceled, "Already canceled");
+        require(!order.isFilled, "Order already filled");
 
         order.isCanceled = true;
 
-        if (orderType == OrderType.BUY) {
+        if (order.orderType == OrderType.BUY) {
             usdc.safeTransfer(order.trader, order.remainUsdcAmount);
         } else {
             token.safeTransfer(order.trader, order.remainTokenAmount);
         }
 
-        return true;
+        emit OrderCanceled(order.id, block.timestamp);
     }
 
     function getIndex(uint256 id) public view returns (OrderType, uint256) {

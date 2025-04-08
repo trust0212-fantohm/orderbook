@@ -52,9 +52,5 @@ interface IOrderBook {
         bool isMarket
     );
 
-    event OrderCancelled(
-        uint256 indexed orderId,
-        address indexed trader,
-        OrderType orderType
-    );
+    event OrderCanceled(uint256 indexed orderId, uint256 cancleTime);
 }
