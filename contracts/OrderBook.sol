@@ -443,7 +443,7 @@ contract OrderBook is
             // match with lowest priced sells ≤ desiredPrice
             for (
                 uint256 i = activeOrderIds[OrderType.SELL].length;
-                i > 0 && newOrder.remainTokenAmount > 0;
+                i > 0 && newOrder.remainUsdcAmount > 0;
 
             ) {
                 uint256 currentOrderId = activeOrderIds[OrderType.SELL][i - 1];
@@ -506,6 +506,7 @@ contract OrderBook is
             if (newOrder.remainUsdcAmount > 0) {
                 insertLimitOrder(newOrder.id);
             } else {
+                newOrder.isFilled = true;
                 orders[nonce] = newOrder;
                 fulfilledOrderIds.push(nonce);
             }
@@ -576,6 +577,7 @@ contract OrderBook is
             if (newOrder.remainTokenAmount > 0) {
                 insertLimitOrder(newOrder.id);
             } else {
+                newOrder.isFilled = true;
                 orders[nonce] = newOrder;
                 fulfilledOrderIds.push(nonce);
             }
@@ -592,33 +594,44 @@ contract OrderBook is
 
         uint256[] storage orderIds = activeOrderIds[order.orderType];
 
-        // Insert orderId at the end
-        orderIds.push(orderId);
+        // Initialize array if empty
+        if (orderIds.length == 0) {
+            orderIds.push(orderId);
+            return;
+        }
 
-        uint256 i = orderIds.length;
-
+        // Find the correct position to insert
+        uint256 insertPosition = orderIds.length;
+        
         if (order.orderType == OrderType.BUY) {
             // Sort orders in ascending order (lower price first)
-            while (
-                i > 1 &&
-                orders[orderIds[i - 1]].desiredPrice > order.desiredPrice
-            ) {
-                orderIds[i] = orderIds[i - 1];
-                i--;
+            for (uint256 i = 0; i < orderIds.length; i++) {
+                if (orders[orderIds[i]].desiredPrice > order.desiredPrice) {
+                    insertPosition = i;
+                    break;
+                }
             }
         } else {
             // Sort orders in descending order (higher price first)
-            while (
-                i > 1 &&
-                orders[orderIds[i - 1]].desiredPrice < order.desiredPrice
-            ) {
-                orderIds[i] = orderIds[i - 1];
-                i--;
+            for (uint256 i = 0; i < orderIds.length; i++) {
+                if (orders[orderIds[i]].desiredPrice < order.desiredPrice) {
+                    insertPosition = i;
+                    break;
+                }
             }
         }
 
-        // Place the new order in the correct position
-        orderIds[i] = orderId;
+        // Insert at the found position
+        if (insertPosition == orderIds.length) {
+            orderIds.push(orderId);
+        } else {
+            // Shift elements to make room
+            orderIds.push(orderIds[orderIds.length - 1]);
+            for (uint256 i = orderIds.length - 1; i > insertPosition; i--) {
+                orderIds[i] = orderIds[i - 1];
+            }
+            orderIds[insertPosition] = orderId;
+        }
     }
 
     function cleanLimitOrders(OrderType orderType) internal {
@@ -652,6 +665,41 @@ contract OrderBook is
         view
         returns (Order memory lastBuyOrder, Order memory lastSellOrder)
     {
+        // Initialize empty orders
+        lastBuyOrder = Order({
+            id: 0,
+            trader: address(0),
+            orderType: OrderType.BUY,
+            desiredPrice: 0,
+            tokenAmount: 0,
+            remainTokenAmount: 0,
+            usdcAmount: 0,
+            remainUsdcAmount: 0,
+            isFilled: false,
+            isMarketOrder: false,
+            isCanceled: false,
+            validTo: 0,
+            lastTradeTimestamp: 0,
+            createdAt: 0
+        });
+        
+        lastSellOrder = Order({
+            id: 0,
+            trader: address(0),
+            orderType: OrderType.SELL,
+            desiredPrice: 0,
+            tokenAmount: 0,
+            remainTokenAmount: 0,
+            usdcAmount: 0,
+            remainUsdcAmount: 0,
+            isFilled: false,
+            isMarketOrder: false,
+            isCanceled: false,
+            validTo: 0,
+            lastTradeTimestamp: 0,
+            createdAt: 0
+        });
+
         if (activeOrderIds[OrderType.BUY].length > 0) {
             lastBuyOrder = orders[
                 activeOrderIds[OrderType.BUY][

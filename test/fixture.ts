@@ -25,8 +25,7 @@ export async function basicFixture() {
         [
             usdc.address,
             token.address,
-            treasury.address,
-            oracle.address
+            treasury.address
         ],
         {
             initializer: "initialize",
@@ -38,30 +37,30 @@ export async function basicFixture() {
     await oracle.writePrice(parseUnits("0.01", 6));
 
     // mint and approve usdc
-    await usdc.mint(parseUnits("1000", 6));
-    await usdc.connect(user1).mint(parseUnits("1000", 6));
-    await usdc.connect(user2).mint(parseUnits("1000", 6));
-    await usdc.connect(user3).mint(parseUnits("1000", 6));
-    await usdc.connect(buyTrader).mint(parseUnits("1000", 6));
+    await usdc.mint(parseUnits("10000", 6));
+    await usdc.connect(user1).mint(parseUnits("10000", 6));
+    await usdc.connect(user2).mint(parseUnits("10000", 6));
+    await usdc.connect(user3).mint(parseUnits("10000", 6));
+    await usdc.connect(buyTrader).mint(parseUnits("10000", 6));
 
-    await usdc.approve(orderBook.address, parseUnits("1000", 6));
-    await usdc.connect(user1).approve(orderBook.address, parseUnits("1000", 6));
-    await usdc.connect(user2).approve(orderBook.address, parseUnits("1000", 6));
-    await usdc.connect(user3).approve(orderBook.address, parseUnits("1000", 6));
-    await usdc.connect(buyTrader).approve(orderBook.address, parseUnits("1000", 6));
+    await usdc.approve(orderBook.address, parseUnits("10000", 6));
+    await usdc.connect(user1).approve(orderBook.address, parseUnits("10000", 6));
+    await usdc.connect(user2).approve(orderBook.address, parseUnits("10000", 6));
+    await usdc.connect(user3).approve(orderBook.address, parseUnits("10000", 6));
+    await usdc.connect(buyTrader).approve(orderBook.address, parseUnits("10000", 6));
 
     // mint and approve tokens
-    await token.mint(parseUnits("1000", 6));
-    await token.connect(user1).mint(parseUnits("1000", 18));
-    await token.connect(user2).mint(parseUnits("1000", 18));
-    await token.connect(user3).mint(parseUnits("1000", 18));
-    await token.connect(sellTrader).mint(parseUnits("1000", 18));
+    await token.mint(parseUnits("10000", 18));
+    await token.connect(user1).mint(parseUnits("10000", 18));
+    await token.connect(user2).mint(parseUnits("10000", 18));
+    await token.connect(user3).mint(parseUnits("10000", 18));
+    await token.connect(sellTrader).mint(parseUnits("10000", 18));
 
-    await token.approve(orderBook.address, parseUnits("1000", 18));
-    await token.connect(user1).approve(orderBook.address, parseUnits("1000", 18));
-    await token.connect(user2).approve(orderBook.address, parseUnits("1000", 18));
-    await token.connect(user3).approve(orderBook.address, parseUnits("1000", 18));
-    await token.connect(sellTrader).approve(orderBook.address, parseUnits("1000", 18));
+    await token.approve(orderBook.address, parseUnits("10000", 18));
+    await token.connect(user1).approve(orderBook.address, parseUnits("10000", 18));
+    await token.connect(user2).approve(orderBook.address, parseUnits("10000", 18));
+    await token.connect(user3).approve(orderBook.address, parseUnits("10000", 18));
+    await token.connect(sellTrader).approve(orderBook.address, parseUnits("10000", 18));
 
     return { orderBook, oracle, usdc, token, owner, treasury, user1, user2, user3, sellTrader, buyTrader };
 }

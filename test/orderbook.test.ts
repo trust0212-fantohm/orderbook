@@ -339,25 +339,48 @@ describe("Order book test", () => {
     });
   });
 
-  describe("OrderBook - Oracle functionality", () => {
-    it("should get latest rate from oracle", async () => {
-      const { orderBook, oracle } = await loadFixture(basicFixture);
+  describe("OrderBook - Latest Rate functionality", () => {
+    it("should get latest buy and sell orders", async () => {
+      const { orderBook, user1, user2 } = await loadFixture(basicFixture);
+      const block = await ethers.provider.getBlock("latest");
 
-      const [bestBidOrder, bestAskOrder] = await orderBook.getLatestRate();
+      // Create a buy order
+      await orderBook.connect(user1).createLimitOrder(
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
+        block.timestamp + 3600,
+        OrderType.BUY
+      );
+
+      // Create a sell order
+      await orderBook.connect(user2).createLimitOrder(
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("50", 18), // tokenAmount
+        block.timestamp + 3600,
+        OrderType.SELL
+      );
+
+      const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
       
-      // Oracle should return valid price
-      expect(bestBidOrder.desiredPrice).to.be.gt(0);
-      expect(bestAskOrder.desiredPrice).to.be.gt(0);
+      // Should return the latest buy order
+      expect(lastBuyOrder.trader).to.equal(user1.address);
+      expect(lastBuyOrder.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
+      
+      // Should return the latest sell order
+      expect(lastSellOrder.trader).to.equal(user2.address);
+      expect(lastSellOrder.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
     });
 
-    it("should allow owner to update oracle address", async () => {
-      const { orderBook, owner, user1 } = await loadFixture(basicFixture);
+    it("should handle empty order books", async () => {
+      const { orderBook } = await loadFixture(basicFixture);
 
-      await orderBook.connect(owner).setOracle(user1.address);
-      expect(await orderBook.priceOracle()).to.equal(user1.address);
-
-      // Should fail if address is zero
-      await expect(orderBook.connect(owner).setOracle(ethers.constants.AddressZero)).to.be.revertedWith("Invalid address");
+      const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
+      
+      // Should return empty orders when no orders exist
+      expect(lastBuyOrder.trader).to.equal(ethers.constants.AddressZero);
+      expect(lastSellOrder.trader).to.equal(ethers.constants.AddressZero);
     });
   });
 });
