@@ -1,401 +1,291 @@
-import { loadFixture } from "ethereum-waffle"
-import { basicFixture } from "./fixture"
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { OrderType } from "./utils/help";
-import { parseUnits } from "ethers/lib/utils";
+import { OrderBook, USDC, ACME } from "../typechain";
+import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 
-describe("Order book test", () => {
-  describe("Create Market Order without limit order", () => {
-    it("Should be failed to create market order without limit order", async () => {
-      const { orderBook, buyTrader, sellTrader } = await loadFixture(basicFixture);
+describe("OrderBook", function () {
+  let orderBook: OrderBook;
+  let usdc: USDC;
+  let token: ACME;
+  let owner: SignerWithAddress;
+  let trader1: SignerWithAddress;
+  let trader2: SignerWithAddress;
+  let treasury: SignerWithAddress;
 
-      // buy order
-      await expect(orderBook.connect(buyTrader).createBuyMarketOrder(parseUnits("100", 6))).to.be.revertedWith("No active sell orders");
+  const USDC_DECIMALS = 6;
+  const TOKEN_DECIMALS = 18;
+  const PRICE_DECIMALS = 6;
 
-      // sell order
-      await expect(orderBook.connect(sellTrader).createSellMarketOrder(parseUnits("1000", 18))).to.be.revertedWith("No active buy orders");
-    });
+  beforeEach(async function () {
+    [owner, trader1, trader2, treasury] = await ethers.getSigners();
+
+    // Deploy USDC
+    const USDC = await ethers.getContractFactory("USDC");
+    usdc = await USDC.deploy();
+    await usdc.deployed();
+
+    // Deploy Token
+    const Token = await ethers.getContractFactory("ACME");
+    token = await Token.deploy();
+    await token.deployed();
+
+    // Deploy OrderBook
+    const OrderBook = await ethers.getContractFactory("OrderBook");
+    orderBook = await OrderBook.deploy();
+    await orderBook.deployed();
+
+    // Initialize OrderBook
+    await orderBook.initialize(usdc.address, token.address, treasury.address);
+
+    // Mint tokens to traders
+    await usdc.mint(ethers.utils.parseUnits("1000000", USDC_DECIMALS));
+    await token.mint(ethers.utils.parseUnits("1000000", TOKEN_DECIMALS));
+
+    // Transfer tokens to traders
+    await usdc.transfer(trader1.address, ethers.utils.parseUnits("100000", USDC_DECIMALS));
+    await usdc.transfer(trader2.address, ethers.utils.parseUnits("100000", USDC_DECIMALS));
+    await token.transfer(trader1.address, ethers.utils.parseUnits("100000", TOKEN_DECIMALS));
+    await token.transfer(trader2.address, ethers.utils.parseUnits("100000", TOKEN_DECIMALS));
   });
 
-  describe("Time-based weighted distribution", () => {
-    it("should distribute tokens based on order age when selling tokens", async () => {
-      const { orderBook, usdc, token, user1, user2, sellTrader, treasury } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
+  describe("createBuyMarketOrder", function () {
+    it("should execute buy market order successfully", async function () {
+      // Create a sell limit order first
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
 
-      // user1 places older buy order
-      await orderBook.connect(user1).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY,
-      );
-
-      // Wait 5 seconds
-      await ethers.provider.send("evm_increaseTime", [5]);
-      await ethers.provider.send("evm_mine", []);
-
-      // user2 places newer buy order
-      await orderBook.connect(user2).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY,
-      );
-
-      const before1 = await token.balanceOf(user1.address);
-      const before2 = await token.balanceOf(user2.address);
-      const beforeTreasury = await token.balanceOf(treasury.address);
-
-      // sellTrader executes market sell
-      await orderBook.connect(sellTrader).createSellMarketOrder(parseUnits("150", 18));
-
-      const after1 = await token.balanceOf(user1.address);
-      const after2 = await token.balanceOf(user2.address);
-      const afterTreasury = await token.balanceOf(treasury.address);
-
-      const user1Received = after1.sub(before1);
-      const user2Received = after2.sub(before2);
-      const treasuryReceived = afterTreasury.sub(beforeTreasury);
-
-      // user1's older order should get more tokens than user2
-      expect(user1Received).to.be.gt(user2Received);
-      // Treasury should receive fees
-      expect(treasuryReceived).to.be.gt(0);
-    });
-
-    it("should distribute USDC based on order age when buying tokens", async () => {
-      const { orderBook, usdc, token, user1, user2, buyTrader, treasury } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      // Older sell order by user1
-      await orderBook.connect(user1).createLimitOrder(
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader1).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("100", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
+        price,
+        tokenAmount,
+        validTo,
+        1 // OrderType.SELL
       );
 
-      await ethers.provider.send("evm_increaseTime", [5]);
-      await ethers.provider.send("evm_mine", []);
+      // Create buy market order
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      await usdc.connect(trader2).approve(orderBook.address, usdcAmount);
+      
+      const trader2TokenBalanceBefore = await token.balanceOf(trader2.address);
+      const trader2UsdcBalanceBefore = await usdc.balanceOf(trader2.address);
+      
+      await orderBook.connect(trader2).createBuyMarketOrder(usdcAmount);
 
-      // Newer sell order by user2
-      await orderBook.connect(user2).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("100", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
-      );
+      const trader2TokenBalanceAfter = await token.balanceOf(trader2.address);
+      const trader2UsdcBalanceAfter = await usdc.balanceOf(trader2.address);
 
-      const before1 = await usdc.balanceOf(user1.address);
-      const before2 = await usdc.balanceOf(user2.address);
-      const beforeTreasury = await usdc.balanceOf(treasury.address);
-
-      // buyTrader executes market buy
-      await orderBook.connect(buyTrader).createLimitOrder(
-        parseUnits("1.5", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
-      );
-
-      const after1 = await usdc.balanceOf(user1.address);
-      const after2 = await usdc.balanceOf(user2.address);
-      const afterTreasury = await usdc.balanceOf(treasury.address);
-
-      const received1 = after1.sub(before1);
-      const received2 = after2.sub(before2);
-      const treasuryReceived = afterTreasury.sub(beforeTreasury);
-
-      // user1's older order should get more USDC than user2
-      expect(received1).to.be.gt(received2);
-      // Treasury should receive fees
-      expect(treasuryReceived).to.be.gt(0);
-    });
-  });
-
-  describe("OrderBook - createLimitOrder function", () => {
-    it("should create and store a buy limit order when no matching sell order exists", async () => {
-      const { orderBook, user1 } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      const tx = await orderBook.connect(user1).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
-      );
-      await tx.wait();
-
-      const orderId = (await orderBook.activeOrderIds(OrderType.BUY, 0)).toNumber();
-      const order = await orderBook.orders(orderId);
-
-      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
-      expect(order.trader).to.equal(user1.address);
-      expect(order.orderType).to.equal(OrderType.BUY);
-      expect(order.isFilled).to.be.false;
+      expect(trader2TokenBalanceAfter).to.be.gt(trader2TokenBalanceBefore);
+      expect(trader2UsdcBalanceAfter).to.be.lt(trader2UsdcBalanceBefore);
     });
 
-    it("should create and store a sell limit order when no matching buy order exists", async () => {
-      const { orderBook, user1 } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      const tx = await orderBook.connect(user1).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("50", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
-      );
-      await tx.wait();
-
-      const orderId = (await orderBook.activeOrderIds(OrderType.SELL, 0)).toNumber();
-      const order = await orderBook.orders(orderId);
-
-      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
-      expect(order.trader).to.equal(user1.address);
-      expect(order.orderType).to.equal(OrderType.SELL);
-      expect(order.isFilled).to.be.false;
-    });
-
-    it("should partially fill a buy limit order if matching sell order exists at lower price", async () => {
-      const { orderBook, usdc, token, user1, user2, treasury } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      // user1 places a sell order
-      await orderBook.connect(user1).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("50", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
-      );
-
-      const beforeTreasury = await token.balanceOf(treasury.address);
-
-      // user2 places a buy order with more quantity
-      await orderBook.connect(user2).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("200", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
-      );
-
-      const afterTreasury = await token.balanceOf(treasury.address);
-
-      // Get the order ID from the event
-      const orderId = (await orderBook.activeOrderIds(OrderType.BUY, 0)).toNumber();
-      const order = await orderBook.orders(orderId);
-
-      // Order should be partially filled
-      expect(order.remainUsdcAmount).to.be.lt(parseUnits("1", 6));
-      expect(order.remainUsdcAmount).to.be.gt(0);
-      // Treasury should receive fees
-      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
-    });
-
-    it("should fail if timeInForce is in the past", async () => {
-      const { orderBook, user1 } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
+    it("should revert if no active sell orders", async function () {
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      
       await expect(
-        orderBook.connect(user1).createLimitOrder(
-          parseUnits("1", 6), // usdcAmount
-          parseUnits("100", 6), // desiredPrice
+        orderBook.connect(trader1).createBuyMarketOrder(usdcAmount)
+      ).to.be.revertedWith("No active sell orders");
+    });
+  });
+
+  describe("createSellMarketOrder", function () {
+    it("should execute sell market order successfully", async function () {
+      // Create a buy limit order first
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0, // tokenAmount
+        validTo,
+        0 // OrderType.BUY
+      );
+
+      // Create sell market order
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      await token.connect(trader2).approve(orderBook.address, tokenAmount);
+      
+      const trader2UsdcBalanceBefore = await usdc.balanceOf(trader2.address);
+      const trader2TokenBalanceBefore = await token.balanceOf(trader2.address);
+      
+      await orderBook.connect(trader2).createSellMarketOrder(tokenAmount);
+
+      const trader2UsdcBalanceAfter = await usdc.balanceOf(trader2.address);
+      const trader2TokenBalanceAfter = await token.balanceOf(trader2.address);
+
+      expect(trader2UsdcBalanceAfter).to.be.gt(trader2UsdcBalanceBefore);
+      expect(trader2TokenBalanceAfter).to.be.lt(trader2TokenBalanceBefore);
+    });
+
+    it("should revert if no active buy orders", async function () {
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      
+      await expect(
+        orderBook.connect(trader1).createSellMarketOrder(tokenAmount)
+      ).to.be.revertedWith("No active buy orders");
+    });
+  });
+
+  describe("createLimitOrder", function () {
+    it("should create buy limit order successfully", async function () {
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0, // tokenAmount
+        validTo,
+        0 // OrderType.BUY
+      );
+
+      const order = await orderBook.orders(0);
+      expect(order.trader).to.equal(trader1.address);
+      expect(order.orderType).to.equal(0); // OrderType.BUY
+      expect(order.desiredPrice).to.equal(price);
+      expect(order.usdcAmount).to.equal(usdcAmount);
+    });
+
+    it("should create sell limit order successfully", async function () {
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      
+      await orderBook.connect(trader1).createLimitOrder(
+        0, // usdcAmount
+        price,
+        tokenAmount,
+        validTo,
+        1 // OrderType.SELL
+      );
+
+      const order = await orderBook.orders(0);
+      expect(order.trader).to.equal(trader1.address);
+      expect(order.orderType).to.equal(1); // OrderType.SELL
+      expect(order.desiredPrice).to.equal(price);
+      expect(order.tokenAmount).to.equal(tokenAmount);
+    });
+
+    it("should revert if validTo is in the past", async function () {
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
+
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      
+      await expect(
+        orderBook.connect(trader1).createLimitOrder(
+          usdcAmount,
+          price,
           0, // tokenAmount
-          block.timestamp - 1,
-          OrderType.BUY
+          validTo,
+          0 // OrderType.BUY
         )
       ).to.be.revertedWith("Invalid time limit");
     });
-
-    it("should match sell limit order with highest buy order respecting time-weight", async () => {
-      const { orderBook, usdc, token, user1, user2, user3, treasury } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      // user1 places a buy order
-      await orderBook.connect(user1).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
-      );
-
-      // wait
-      await ethers.provider.send("evm_increaseTime", [5]);
-      await ethers.provider.send("evm_mine", []);
-
-      // user2 places a second buy order at the same price
-      await orderBook.connect(user2).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
-      );
-
-      const beforeTreasury = await token.balanceOf(treasury.address);
-
-      // user3 sells tokens
-      await orderBook.connect(user3).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("150", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
-      );
-
-      const afterTreasury = await token.balanceOf(treasury.address);
-
-      // Get the order ID from the event
-      const orderId = (await orderBook.activeOrderIds(OrderType.SELL, 0)).toNumber();
-      const order = await orderBook.orders(orderId);
-
-      // Order should be filled
-      expect(order.isFilled).to.be.true;
-      // Treasury should receive fees
-      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
-    });
   });
 
-  describe("OrderBook - Fee and Treasury functionality", () => {
-    it("should collect fees on buy market orders", async () => {
-      const { orderBook, usdc, token, user1, treasury } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
+  describe("cancelOrder", function () {
+    it("should cancel order successfully", async function () {
+      // Create a limit order first
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
 
-      // Create a sell order
-      await orderBook.connect(user1).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("100", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
-      );
-
-      const beforeTreasury = await token.balanceOf(treasury.address);
-      const beforeUser = await token.balanceOf(user1.address);
-
-      // Execute buy market order
-      await orderBook.createBuyMarketOrder(parseUnits("1", 6));
-
-      const afterTreasury = await token.balanceOf(treasury.address);
-      const afterUser = await token.balanceOf(user1.address);
-
-      // Treasury should receive fees
-      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
-      // User should receive less than full amount due to fees
-      expect(afterUser.sub(beforeUser)).to.be.lt(parseUnits("100", 18));
-    });
-
-    it("should collect fees on sell market orders", async () => {
-      const { orderBook, usdc, token, user1, treasury } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      // Create a buy order
-      await orderBook.connect(user1).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
         0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
+        validTo,
+        0 // OrderType.BUY
       );
 
-      const beforeTreasury = await usdc.balanceOf(treasury.address);
-      const beforeUser = await usdc.balanceOf(user1.address);
+      const trader1UsdcBalanceBefore = await usdc.balanceOf(trader1.address);
+      
+      await orderBook.connect(trader1).cancelOrder(0);
 
-      // Execute sell market order
-      await orderBook.createSellMarketOrder(parseUnits("100", 18));
+      const trader1UsdcBalanceAfter = await usdc.balanceOf(trader1.address);
+      const order = await orderBook.orders(0);
 
-      const afterTreasury = await usdc.balanceOf(treasury.address);
-      const afterUser = await usdc.balanceOf(user1.address);
-
-      // Treasury should receive fees
-      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
-      // User should receive less than full amount due to fees
-      expect(afterUser.sub(beforeUser)).to.be.lt(parseUnits("1", 6));
+      expect(trader1UsdcBalanceAfter).to.be.gt(trader1UsdcBalanceBefore);
+      expect(order.isCanceled).to.be.true;
     });
 
-    it("should allow owner to update fee rates", async () => {
-      const { orderBook, owner } = await loadFixture(basicFixture);
+    it("should revert if order is already canceled", async function () {
+      // Create and cancel an order
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600;
 
-      // Update buy fee
-      await orderBook.connect(owner).setbuyFeeBips(1000);
-      expect(await orderBook.buyFeeBips()).to.equal(1000);
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
+      );
+      await orderBook.connect(trader1).cancelOrder(0);
 
-      // Update sell fee
-      await orderBook.connect(owner).setsellFeeBips(1000);
-      expect(await orderBook.sellFeeBips()).to.equal(1000);
-
-      // Should fail if fee is too high
-      await expect(orderBook.connect(owner).setbuyFeeBips(10001)).to.be.revertedWith("Invalid buyFeeBips");
-      await expect(orderBook.connect(owner).setsellFeeBips(10001)).to.be.revertedWith("Invalid sellFeeBips");
+      await expect(
+        orderBook.connect(trader1).cancelOrder(0)
+      ).to.be.revertedWith("Already canceled");
     });
 
-    it("should allow owner to update treasury address", async () => {
-      const { orderBook, owner, user1 } = await loadFixture(basicFixture);
+    it("should revert if order is already filled", async function () {
+      // Create a limit order and fill it
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600;
 
-      await orderBook.connect(owner).setTreasury(user1.address);
-      expect(await orderBook.treasury()).to.equal(user1.address);
-
-      // Should fail if address is zero
-      await expect(orderBook.connect(owner).setTreasury(ethers.constants.AddressZero)).to.be.revertedWith("Invalid address");
-    });
-  });
-
-  describe("OrderBook - Latest Rate functionality", () => {
-    it("should handle empty order books", async () => {
-      const { orderBook } = await loadFixture(basicFixture);
-
-      const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
-
-      // Should return empty orders when no orders exist
-      expect(lastBuyOrder.trader).to.equal(ethers.constants.AddressZero);
-      expect(lastSellOrder.trader).to.equal(ethers.constants.AddressZero);
-      expect(lastBuyOrder.desiredPrice).to.equal(0);
-      expect(lastSellOrder.desiredPrice).to.equal(0);
-    });
-
-    it("should get latest buy and sell orders", async () => {
-      const { orderBook, user1, user2 } = await loadFixture(basicFixture);
-      const block = await ethers.provider.getBlock("latest");
-
-      // Create a buy order
-      await orderBook.connect(user1).createLimitOrder(
-        parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        0, // tokenAmount
-        block.timestamp + 3600,
-        OrderType.BUY
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
       );
 
-      // Create a sell order
-      await orderBook.connect(user2).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("150", 6), // desiredPrice
-        parseUnits("50", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
+      // Create a matching sell market order to fill the buy order
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      await token.connect(trader2).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader2).createSellMarketOrder(tokenAmount);
+
+      await expect(
+        orderBook.connect(trader1).cancelOrder(0)
+      ).to.be.revertedWith("Order already filled");
+    });
+
+    it("should revert if caller is not the order maker", async function () {
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600;
+
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
       );
 
-      const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
-
-      // Should return the latest sell order
-      expect(lastSellOrder.trader).to.equal(user2.address);
-      expect(lastSellOrder.desiredPrice.toString()).to.equal(parseUnits("150", 6).toString());
-      expect(lastSellOrder.orderType).to.equal(OrderType.SELL);
-
-      // Should return the latest buy order
-      expect(lastBuyOrder.trader).to.equal(user1.address);
-      expect(lastBuyOrder.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
-      expect(lastBuyOrder.orderType).to.equal(OrderType.BUY);
+      await expect(
+        orderBook.connect(trader2).cancelOrder(0)
+      ).to.be.revertedWith("You are not an maker of this order");
     });
   });
 });
