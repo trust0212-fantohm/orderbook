@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IOrderBook} from "./interfaces/IOrderBook.sol";
+import "hardhat/console.sol";
 
 contract OrderBook is
     Initializable,
@@ -389,49 +390,32 @@ contract OrderBook is
         uint256 validTo,
         OrderType orderType
     ) external nonReentrant {
-        Order memory newOrder;
-
         require(validTo > block.timestamp, "Invalid time limit");
 
         if (orderType == OrderType.BUY) {
-            // uint256 usdcAmount = (desiredPrice * tokenAmount) /
-            //     10 ** price_decimals;
             usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
-            newOrder = Order({
-                id: nonce,
-                trader: msg.sender,
-                orderType: OrderType.BUY,
-                desiredPrice: desiredPrice,
-                tokenAmount: 0,
-                remainTokenAmount: 0,
-                usdcAmount: usdcAmount,
-                remainUsdcAmount: usdcAmount,
-                isFilled: false,
-                isMarketOrder: false,
-                isCanceled: false,
-                validTo: validTo,
-                lastTradeTimestamp: 0,
-                createdAt: block.timestamp
-            });
         } else {
             token.safeTransferFrom(msg.sender, address(this), tokenAmount);
-            newOrder = Order({
-                id: nonce,
-                trader: msg.sender,
-                orderType: OrderType.SELL,
-                desiredPrice: desiredPrice,
-                tokenAmount: tokenAmount,
-                remainTokenAmount: tokenAmount,
-                usdcAmount: 0,
-                remainUsdcAmount: 0,
-                isFilled: false,
-                isMarketOrder: false,
-                isCanceled: false,
-                validTo: validTo,
-                lastTradeTimestamp: 0,
-                createdAt: block.timestamp
-            });
         }
+
+        Order memory newOrder = Order({
+            id: nonce,
+            trader: msg.sender,
+            orderType: orderType,
+            desiredPrice: desiredPrice,
+            tokenAmount: tokenAmount,
+            remainTokenAmount: tokenAmount,
+            usdcAmount: usdcAmount,
+            remainUsdcAmount: usdcAmount,
+            isFilled: false,
+            isMarketOrder: false,
+            isCanceled: false,
+            validTo: validTo,
+            lastTradeTimestamp: 0,
+            createdAt: block.timestamp
+        });
+
+        console.log("newOrder", newOrder.trader);
 
         orders[nonce] = newOrder;
         orderIdsByUser[msg.sender].push(nonce);
@@ -480,20 +464,23 @@ contract OrderBook is
                 }
 
                 // Time-weighted distribution
-                (uint256 tokenFilled, uint256 usdcUsed) = distributeBuyOrderAcrossPriceLevel(
-                    newOrder,
-                    currentPrice,
-                    j,
-                    i,
-                    totalWeight,
-                    nowTime
-                );
+                (
+                    uint256 tokenFilled,
+                    uint256 usdcUsed
+                ) = distributeBuyOrderAcrossPriceLevel(
+                        newOrder,
+                        currentPrice,
+                        j,
+                        i,
+                        totalWeight,
+                        nowTime
+                    );
 
                 // Apply fees for the matched tokens
-                (uint256 realTokenAmount, uint256 feeTokenAmount) = getAmountDeductFee(
-                    tokenFilled,
-                    OrderType.BUY
-                );
+                (
+                    uint256 realTokenAmount,
+                    uint256 feeTokenAmount
+                ) = getAmountDeductFee(tokenFilled, OrderType.BUY);
                 token.safeTransfer(newOrder.trader, realTokenAmount);
                 token.safeTransfer(treasury, feeTokenAmount);
 
@@ -521,12 +508,13 @@ contract OrderBook is
                 Order storage buyOrder = orders[currentOrderId];
                 if (
                     isInvalidOrder(buyOrder.id) ||
-                    buyOrder.desiredPrice < desiredPrice
+                    buyOrder.desiredPrice < newOrder.desiredPrice
                 ) {
                     i--;
                     continue;
                 }
 
+                // Find price group
                 uint256 currentPrice = buyOrder.desiredPrice;
                 uint256 j = i;
                 while (
@@ -561,10 +549,10 @@ contract OrderBook is
                     );
 
                 // Apply fees for the matched USDC
-                (uint256 realUsdcAmount, uint256 feeUsdcAmount) = getAmountDeductFee(
-                    usdcFilled,
-                    OrderType.SELL
-                );
+                (
+                    uint256 realUsdcAmount,
+                    uint256 feeUsdcAmount
+                ) = getAmountDeductFee(usdcFilled, OrderType.SELL);
                 usdc.safeTransfer(newOrder.trader, realUsdcAmount);
                 usdc.safeTransfer(treasury, feeUsdcAmount);
 
@@ -602,7 +590,7 @@ contract OrderBook is
 
         // Find the correct position to insert
         uint256 insertPosition = orderIds.length;
-        
+
         if (order.orderType == OrderType.BUY) {
             // Sort orders in ascending order (lower price first)
             for (uint256 i = 0; i < orderIds.length; i++) {
@@ -635,70 +623,42 @@ contract OrderBook is
     }
 
     function cleanLimitOrders(OrderType orderType) internal {
-        while (
-            activeOrderIds[orderType].length > 0 &&
-            isInvalidOrder(
-                orders[
-                    activeOrderIds[orderType][
-                        activeOrderIds[orderType].length - 1
-                    ]
-                ].id
-            )
-        ) {
-            uint256 lastOrderId = activeOrderIds[orderType][activeOrderIds[orderType].length - 1];
-            activeOrderIds[orderType].pop();
-            fulfilledOrderIds.push(lastOrderId);
+        uint256[] storage orderIds = activeOrderIds[orderType];
+        uint256 writeIndex = 0;
+
+        for (uint256 readIndex = 0; readIndex < orderIds.length; readIndex++) {
+            if (!isInvalidOrder(orders[orderIds[readIndex]].id)) {
+                if (writeIndex != readIndex) {
+                    orderIds[writeIndex] = orderIds[readIndex];
+                }
+                writeIndex++;
+            } else {
+                fulfilledOrderIds.push(orderIds[readIndex]);
+            }
+        }
+
+        while (orderIds.length > writeIndex) {
+            orderIds.pop();
         }
     }
 
     function isInvalidOrder(uint256 orderId) internal view returns (bool) {
-        Order memory order = orders[orderId]; // Fetch order from storage
+        Order memory order = orders[orderId];
         return
             order.isCanceled ||
             order.isFilled ||
             order.validTo < block.timestamp ||
-            order.remainTokenAmount == 0;
+            (order.orderType == OrderType.BUY && order.remainUsdcAmount == 0) ||
+            (order.orderType == OrderType.SELL && order.remainTokenAmount == 0);
     }
 
     function getLatestRate()
         external
         view
-        returns (Order memory lastBuyOrder, Order memory lastSellOrder)
+        returns (Order memory, Order memory)
     {
-        // Initialize empty orders
-        lastBuyOrder = Order({
-            id: 0,
-            trader: address(0),
-            orderType: OrderType.BUY,
-            desiredPrice: 0,
-            tokenAmount: 0,
-            remainTokenAmount: 0,
-            usdcAmount: 0,
-            remainUsdcAmount: 0,
-            isFilled: false,
-            isMarketOrder: false,
-            isCanceled: false,
-            validTo: 0,
-            lastTradeTimestamp: 0,
-            createdAt: 0
-        });
-        
-        lastSellOrder = Order({
-            id: 0,
-            trader: address(0),
-            orderType: OrderType.SELL,
-            desiredPrice: 0,
-            tokenAmount: 0,
-            remainTokenAmount: 0,
-            usdcAmount: 0,
-            remainUsdcAmount: 0,
-            isFilled: false,
-            isMarketOrder: false,
-            isCanceled: false,
-            validTo: 0,
-            lastTradeTimestamp: 0,
-            createdAt: 0
-        });
+        Order memory lastBuyOrder;
+        Order memory lastSellOrder;
 
         if (activeOrderIds[OrderType.BUY].length > 0) {
             lastBuyOrder = orders[
@@ -715,6 +675,8 @@ contract OrderBook is
                 ]
             ];
         }
+
+        return (lastBuyOrder, lastSellOrder);
     }
 
     function getOrderBook(
@@ -722,14 +684,16 @@ contract OrderBook is
         OrderType orderType
     ) external view returns (Order[] memory) {
         uint256[] storage activeIds = activeOrderIds[orderType];
-        uint256 actualDepth = depth > activeIds.length ? activeIds.length : depth;
-        
+        uint256 actualDepth = depth > activeIds.length
+            ? activeIds.length
+            : depth;
+
         Order[] memory result = new Order[](actualDepth);
-        
+
         for (uint256 i = 0; i < actualDepth; i++) {
             result[i] = orders[activeIds[activeIds.length - 1 - i]];
         }
-        
+
         return result;
     }
 

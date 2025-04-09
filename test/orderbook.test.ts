@@ -26,7 +26,7 @@ describe("Order book test", () => {
       // user1 places older buy order
       await orderBook.connect(user1).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY,
@@ -39,7 +39,7 @@ describe("Order book test", () => {
       // user2 places newer buy order
       await orderBook.connect(user2).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY,
@@ -49,12 +49,24 @@ describe("Order book test", () => {
       const before2 = await token.balanceOf(user2.address);
       const beforeTreasury = await token.balanceOf(treasury.address);
 
+      console.log("before1", before1);
+      console.log("before2", before2);
+
       // sellTrader executes market sell
-      await orderBook.connect(sellTrader).createSellMarketOrder(parseUnits("150", 18));
+      await orderBook.connect(sellTrader).createLimitOrder(
+        0, // usdcAmount
+        parseUnits("100", 6), // desiredPrice
+        parseUnits("150", 18), // tokenAmount
+        block.timestamp + 3600,
+        OrderType.SELL
+      );
 
       const after1 = await token.balanceOf(user1.address);
       const after2 = await token.balanceOf(user2.address);
       const afterTreasury = await token.balanceOf(treasury.address);
+
+      console.log("after1", after1);
+      console.log("after2", after2);
 
       const user1Received = after1.sub(before1);
       const user2Received = after2.sub(before2);
@@ -73,7 +85,7 @@ describe("Order book test", () => {
       // Older sell order by user1
       await orderBook.connect(user1).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         parseUnits("100", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
@@ -85,7 +97,7 @@ describe("Order book test", () => {
       // Newer sell order by user2
       await orderBook.connect(user2).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         parseUnits("100", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
@@ -95,7 +107,14 @@ describe("Order book test", () => {
       const before2 = await usdc.balanceOf(user2.address);
       const beforeTreasury = await usdc.balanceOf(treasury.address);
 
-      await orderBook.connect(buyTrader).createBuyMarketOrder(parseUnits("1.5", 6));
+      // buyTrader executes market buy
+      await orderBook.connect(buyTrader).createLimitOrder(
+        parseUnits("1.5", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
+        block.timestamp + 3600,
+        OrderType.BUY
+      );
 
       const after1 = await usdc.balanceOf(user1.address);
       const after2 = await usdc.balanceOf(user2.address);
@@ -119,7 +138,7 @@ describe("Order book test", () => {
 
       const tx = await orderBook.connect(user1).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
@@ -128,8 +147,8 @@ describe("Order book test", () => {
 
       const orderId = (await orderBook.activeOrderIds(OrderType.BUY, 0)).toNumber();
       const order = await orderBook.orders(orderId);
-      
-      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
+
+      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
       expect(order.trader).to.equal(user1.address);
     });
 
@@ -139,7 +158,7 @@ describe("Order book test", () => {
 
       const tx = await orderBook.connect(user1).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         parseUnits("50", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
@@ -148,8 +167,8 @@ describe("Order book test", () => {
 
       const orderId = (await orderBook.activeOrderIds(OrderType.SELL, 0)).toNumber();
       const order = await orderBook.orders(orderId);
-      
-      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
+
+      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
       expect(order.trader).to.equal(user1.address);
     });
 
@@ -160,7 +179,7 @@ describe("Order book test", () => {
       // user1 places a sell order
       await orderBook.connect(user1).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         parseUnits("50", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
@@ -171,7 +190,7 @@ describe("Order book test", () => {
       // user2 places a buy order with more quantity
       await orderBook.connect(user2).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("200", 18), // desiredPrice
+        parseUnits("200", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
@@ -182,7 +201,7 @@ describe("Order book test", () => {
       // Get the order ID from the event
       const orderId = (await orderBook.activeOrderIds(OrderType.BUY, 0)).toNumber();
       const order = await orderBook.orders(orderId);
-      
+
       // Order should be partially filled
       expect(order.remainUsdcAmount).to.be.lt(parseUnits("1", 6));
       expect(order.remainUsdcAmount).to.be.gt(0);
@@ -197,7 +216,7 @@ describe("Order book test", () => {
       await expect(
         orderBook.connect(user1).createLimitOrder(
           parseUnits("1", 6), // usdcAmount
-          parseUnits("100", 18), // desiredPrice
+          parseUnits("100", 6), // desiredPrice
           0, // tokenAmount
           block.timestamp - 1,
           OrderType.BUY
@@ -212,7 +231,7 @@ describe("Order book test", () => {
       // user1 places a buy order
       await orderBook.connect(user1).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
@@ -225,7 +244,7 @@ describe("Order book test", () => {
       // user2 places a second buy order at the same price
       await orderBook.connect(user2).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
@@ -236,7 +255,7 @@ describe("Order book test", () => {
       // user3 sells tokens
       await orderBook.connect(user3).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         parseUnits("150", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
@@ -247,7 +266,7 @@ describe("Order book test", () => {
       // Get the order ID from the event
       const orderId = (await orderBook.activeOrderIds(OrderType.SELL, 0)).toNumber();
       const order = await orderBook.orders(orderId);
-      
+
       // Order should be filled
       expect(order.isFilled).to.be.true;
       // Treasury should receive fees
@@ -263,7 +282,7 @@ describe("Order book test", () => {
       // Create a sell order
       await orderBook.connect(user1).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         parseUnits("100", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
@@ -291,7 +310,7 @@ describe("Order book test", () => {
       // Create a buy order
       await orderBook.connect(user1).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
@@ -340,6 +359,16 @@ describe("Order book test", () => {
   });
 
   describe("OrderBook - Latest Rate functionality", () => {
+    it("should handle empty order books", async () => {
+      const { orderBook } = await loadFixture(basicFixture);
+
+      const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
+
+      // Should return empty orders when no orders exist
+      expect(lastBuyOrder.trader).to.equal(ethers.constants.AddressZero);
+      expect(lastSellOrder.trader).to.equal(ethers.constants.AddressZero);
+    });
+
     it("should get latest buy and sell orders", async () => {
       const { orderBook, user1, user2 } = await loadFixture(basicFixture);
       const block = await ethers.provider.getBlock("latest");
@@ -347,7 +376,7 @@ describe("Order book test", () => {
       // Create a buy order
       await orderBook.connect(user1).createLimitOrder(
         parseUnits("1", 6), // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 6), // desiredPrice
         0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
@@ -356,31 +385,25 @@ describe("Order book test", () => {
       // Create a sell order
       await orderBook.connect(user2).createLimitOrder(
         0, // usdcAmount
-        parseUnits("100", 18), // desiredPrice
+        parseUnits("150", 6), // desiredPrice
         parseUnits("50", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
 
       const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
-      
-      // Should return the latest buy order
-      expect(lastBuyOrder.trader).to.equal(user1.address);
-      expect(lastBuyOrder.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
-      
+      console.log("lastBuyOrder", lastBuyOrder);
+      console.log("lastSellOrder", lastSellOrder);
+
+
       // Should return the latest sell order
       expect(lastSellOrder.trader).to.equal(user2.address);
-      expect(lastSellOrder.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
-    });
+      expect(lastSellOrder.desiredPrice.toString()).to.equal(parseUnits("150", 6).toString());
 
-    it("should handle empty order books", async () => {
-      const { orderBook } = await loadFixture(basicFixture);
+      // Should return the latest buy order
+      expect(lastBuyOrder.trader).to.equal(user1.address);
+      expect(lastBuyOrder.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
 
-      const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
-      
-      // Should return empty orders when no orders exist
-      expect(lastBuyOrder.trader).to.equal(ethers.constants.AddressZero);
-      expect(lastSellOrder.trader).to.equal(ethers.constants.AddressZero);
     });
   });
 });
