@@ -49,24 +49,12 @@ describe("Order book test", () => {
       const before2 = await token.balanceOf(user2.address);
       const beforeTreasury = await token.balanceOf(treasury.address);
 
-      console.log("before1", before1);
-      console.log("before2", before2);
-
       // sellTrader executes market sell
-      await orderBook.connect(sellTrader).createLimitOrder(
-        0, // usdcAmount
-        parseUnits("100", 6), // desiredPrice
-        parseUnits("150", 18), // tokenAmount
-        block.timestamp + 3600,
-        OrderType.SELL
-      );
+      await orderBook.connect(sellTrader).createSellMarketOrder(parseUnits("150", 18));
 
       const after1 = await token.balanceOf(user1.address);
       const after2 = await token.balanceOf(user2.address);
       const afterTreasury = await token.balanceOf(treasury.address);
-
-      console.log("after1", after1);
-      console.log("after2", after2);
 
       const user1Received = after1.sub(before1);
       const user2Received = after2.sub(before2);
@@ -150,6 +138,8 @@ describe("Order book test", () => {
 
       expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
       expect(order.trader).to.equal(user1.address);
+      expect(order.orderType).to.equal(OrderType.BUY);
+      expect(order.isFilled).to.be.false;
     });
 
     it("should create and store a sell limit order when no matching buy order exists", async () => {
@@ -170,6 +160,8 @@ describe("Order book test", () => {
 
       expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
       expect(order.trader).to.equal(user1.address);
+      expect(order.orderType).to.equal(OrderType.SELL);
+      expect(order.isFilled).to.be.false;
     });
 
     it("should partially fill a buy limit order if matching sell order exists at lower price", async () => {
@@ -367,6 +359,8 @@ describe("Order book test", () => {
       // Should return empty orders when no orders exist
       expect(lastBuyOrder.trader).to.equal(ethers.constants.AddressZero);
       expect(lastSellOrder.trader).to.equal(ethers.constants.AddressZero);
+      expect(lastBuyOrder.desiredPrice).to.equal(0);
+      expect(lastSellOrder.desiredPrice).to.equal(0);
     });
 
     it("should get latest buy and sell orders", async () => {
@@ -392,18 +386,16 @@ describe("Order book test", () => {
       );
 
       const [lastBuyOrder, lastSellOrder] = await orderBook.getLatestRate();
-      console.log("lastBuyOrder", lastBuyOrder);
-      console.log("lastSellOrder", lastSellOrder);
-
 
       // Should return the latest sell order
       expect(lastSellOrder.trader).to.equal(user2.address);
       expect(lastSellOrder.desiredPrice.toString()).to.equal(parseUnits("150", 6).toString());
+      expect(lastSellOrder.orderType).to.equal(OrderType.SELL);
 
       // Should return the latest buy order
       expect(lastBuyOrder.trader).to.equal(user1.address);
       expect(lastBuyOrder.desiredPrice.toString()).to.equal(parseUnits("100", 6).toString());
-
+      expect(lastBuyOrder.orderType).to.equal(OrderType.BUY);
     });
   });
 });
