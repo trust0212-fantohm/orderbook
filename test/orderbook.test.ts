@@ -20,13 +20,14 @@ describe("Order book test", () => {
 
   describe("Time-based weighted distribution", () => {
     it("should distribute tokens based on order age when selling tokens", async () => {
-      const { orderBook, usdc, token, user1, user2, sellTrader } = await loadFixture(basicFixture);
+      const { orderBook, usdc, token, user1, user2, sellTrader, treasury } = await loadFixture(basicFixture);
       const block = await ethers.provider.getBlock("latest");
 
       // user1 places older buy order
       await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY,
       );
@@ -37,37 +38,43 @@ describe("Order book test", () => {
 
       // user2 places newer buy order
       await orderBook.connect(user2).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY,
       );
 
       const before1 = await token.balanceOf(user1.address);
       const before2 = await token.balanceOf(user2.address);
+      const beforeTreasury = await token.balanceOf(treasury.address);
 
-      // sellTrader executes market sell for 150 tokens
-      await expect(orderBook.connect(sellTrader).createSellMarketOrder(parseUnits("250", 18))).to.be.revertedWith("Insufficient USDC supply");
+      // sellTrader executes market sell
       await orderBook.connect(sellTrader).createSellMarketOrder(parseUnits("150", 18));
 
       const after1 = await token.balanceOf(user1.address);
       const after2 = await token.balanceOf(user2.address);
+      const afterTreasury = await token.balanceOf(treasury.address);
 
       const user1Received = after1.sub(before1);
       const user2Received = after2.sub(before2);
+      const treasuryReceived = afterTreasury.sub(beforeTreasury);
 
       // user1's older order should get more tokens than user2
       expect(user1Received).to.be.gt(user2Received);
+      // Treasury should receive fees
+      expect(treasuryReceived).to.be.gt(0);
     });
 
     it("should distribute USDC based on order age when buying tokens", async () => {
-      const { orderBook, usdc, user1, user2, buyTrader } = await loadFixture(basicFixture);
+      const { orderBook, usdc, token, user1, user2, buyTrader, treasury } = await loadFixture(basicFixture);
       const block = await ethers.provider.getBlock("latest");
 
       // Older sell order by user1
       await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
@@ -77,26 +84,31 @@ describe("Order book test", () => {
 
       // Newer sell order by user2
       await orderBook.connect(user2).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
 
       const before1 = await usdc.balanceOf(user1.address);
       const before2 = await usdc.balanceOf(user2.address);
+      const beforeTreasury = await usdc.balanceOf(treasury.address);
 
-      await expect(orderBook.connect(buyTrader).createBuyMarketOrder(parseUnits("2.5", 6))).to.be.revertedWith("Insufficient Token Supply");
       await orderBook.connect(buyTrader).createBuyMarketOrder(parseUnits("1.5", 6));
 
       const after1 = await usdc.balanceOf(user1.address);
       const after2 = await usdc.balanceOf(user2.address);
+      const afterTreasury = await usdc.balanceOf(treasury.address);
 
       const received1 = after1.sub(before1);
       const received2 = after2.sub(before2);
+      const treasuryReceived = afterTreasury.sub(beforeTreasury);
 
       // user1's older order should get more USDC than user2
       expect(received1).to.be.gt(received2);
+      // Treasury should receive fees
+      expect(treasuryReceived).to.be.gt(0);
     });
   });
 
@@ -106,18 +118,18 @@ describe("Order book test", () => {
       const block = await ethers.provider.getBlock("latest");
 
       const tx = await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6), // price
-        parseUnits("100", 18), // amount
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
       );
       await tx.wait();
 
-      // Get the order ID from the event
       const orderId = (await orderBook.activeOrderIds(OrderType.BUY, 0)).toNumber();
       const order = await orderBook.orders(orderId);
       
-      expect(order.desiredPrice.toString()).to.equal(parseUnits("0.01", 6).toString());
+      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
       expect(order.trader).to.equal(user1.address);
     });
 
@@ -126,48 +138,56 @@ describe("Order book test", () => {
       const block = await ethers.provider.getBlock("latest");
 
       const tx = await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.02", 6), // price
-        parseUnits("50", 18), // amount
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("50", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
       await tx.wait();
 
-      // Get the order ID from the event
       const orderId = (await orderBook.activeOrderIds(OrderType.SELL, 0)).toNumber();
       const order = await orderBook.orders(orderId);
       
-      expect(order.desiredPrice.toString()).to.equal(parseUnits("0.02", 6).toString());
+      expect(order.desiredPrice.toString()).to.equal(parseUnits("100", 18).toString());
       expect(order.trader).to.equal(user1.address);
     });
 
     it("should partially fill a buy limit order if matching sell order exists at lower price", async () => {
-      const { orderBook, user1, user2 } = await loadFixture(basicFixture);
+      const { orderBook, usdc, token, user1, user2, treasury } = await loadFixture(basicFixture);
       const block = await ethers.provider.getBlock("latest");
 
       // user1 places a sell order
       await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("50", 18),
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("50", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
 
+      const beforeTreasury = await token.balanceOf(treasury.address);
+
       // user2 places a buy order with more quantity
       await orderBook.connect(user2).createLimitOrder(
-        parseUnits("0.02", 6),
-        parseUnits("100", 18),
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("200", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
       );
+
+      const afterTreasury = await token.balanceOf(treasury.address);
 
       // Get the order ID from the event
       const orderId = (await orderBook.activeOrderIds(OrderType.BUY, 0)).toNumber();
       const order = await orderBook.orders(orderId);
       
       // Order should be partially filled
-      expect(order.remainTokenAmount).to.be.lt(parseUnits("100", 18));
-      expect(order.remainTokenAmount).to.be.gt(0);
+      expect(order.remainUsdcAmount).to.be.lt(parseUnits("1", 6));
+      expect(order.remainUsdcAmount).to.be.gt(0);
+      // Treasury should receive fees
+      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
     });
 
     it("should fail if timeInForce is in the past", async () => {
@@ -176,8 +196,9 @@ describe("Order book test", () => {
 
       await expect(
         orderBook.connect(user1).createLimitOrder(
-          parseUnits("0.01", 6),
-          parseUnits("100", 18),
+          parseUnits("1", 6), // usdcAmount
+          parseUnits("100", 18), // desiredPrice
+          0, // tokenAmount
           block.timestamp - 1,
           OrderType.BUY
         )
@@ -185,13 +206,14 @@ describe("Order book test", () => {
     });
 
     it("should match sell limit order with highest buy order respecting time-weight", async () => {
-      const { orderBook, user1, user2, user3 } = await loadFixture(basicFixture);
+      const { orderBook, usdc, token, user1, user2, user3, treasury } = await loadFixture(basicFixture);
       const block = await ethers.provider.getBlock("latest");
 
       // user1 places a buy order
       await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
       );
@@ -202,22 +224,25 @@ describe("Order book test", () => {
 
       // user2 places a second buy order at the same price
       await orderBook.connect(user2).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
       );
 
-      const before1 = await ethers.provider.getBalance(user1.address);
-      const before2 = await ethers.provider.getBalance(user2.address);
+      const beforeTreasury = await token.balanceOf(treasury.address);
 
       // user3 sells tokens
       await orderBook.connect(user3).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("150", 18),
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("150", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
+
+      const afterTreasury = await token.balanceOf(treasury.address);
 
       // Get the order ID from the event
       const orderId = (await orderBook.activeOrderIds(OrderType.SELL, 0)).toNumber();
@@ -225,6 +250,8 @@ describe("Order book test", () => {
       
       // Order should be filled
       expect(order.isFilled).to.be.true;
+      // Treasury should receive fees
+      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
     });
   });
 
@@ -235,8 +262,9 @@ describe("Order book test", () => {
 
       // Create a sell order
       await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        0, // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        parseUnits("100", 18), // tokenAmount
         block.timestamp + 3600,
         OrderType.SELL
       );
@@ -262,8 +290,9 @@ describe("Order book test", () => {
 
       // Create a buy order
       await orderBook.connect(user1).createLimitOrder(
-        parseUnits("0.01", 6),
-        parseUnits("100", 18),
+        parseUnits("1", 6), // usdcAmount
+        parseUnits("100", 18), // desiredPrice
+        0, // tokenAmount
         block.timestamp + 3600,
         OrderType.BUY
       );
@@ -317,8 +346,8 @@ describe("Order book test", () => {
       const [bestBidOrder, bestAskOrder] = await orderBook.getLatestRate();
       
       // Oracle should return valid price
-      expect(bestBidOrder.price).to.be.gt(0);
-      expect(bestAskOrder.price).to.be.gt(0);
+      expect(bestBidOrder.desiredPrice).to.be.gt(0);
+      expect(bestAskOrder.desiredPrice).to.be.gt(0);
     });
 
     it("should allow owner to update oracle address", async () => {

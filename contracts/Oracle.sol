@@ -4,9 +4,7 @@ pragma solidity 0.8.4;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
-import "./interfaces/IOracle.sol";
-
-contract Oracle is AccessControl, IOracle {
+contract Oracle is AccessControl {
     struct Round {
         uint256 timestamp;
         uint256 price;

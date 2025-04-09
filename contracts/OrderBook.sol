@@ -8,7 +8,6 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IOrderBook} from "./interfaces/IOrderBook.sol";
-import {IOracle} from "./interfaces/IOracle.sol";
 
 contract OrderBook is
     Initializable,
@@ -22,7 +21,6 @@ contract OrderBook is
 
     IERC20 public usdc;
     IERC20 public token;
-    IOracle public priceOracle;
 
     uint256 private constant BASE_BIPS = 10000;
     uint256 private constant price_decimals = 18;
@@ -40,7 +38,6 @@ contract OrderBook is
     function initialize(
         address _usdcAddress,
         address _tokenAddress,
-        address _priceOracle,
         address _treasury
     ) public initializer {
         __Ownable_init();
@@ -48,7 +45,6 @@ contract OrderBook is
 
         usdc = IERC20(_usdcAddress);
         token = IERC20(_tokenAddress);
-        priceOracle = IOracle(_priceOracle);
         treasury = _treasury;
         buyFeeBips = 500;
         sellFeeBips = 500;
@@ -484,7 +480,7 @@ contract OrderBook is
                 }
 
                 // Time-weighted distribution
-                (, uint256 usdcUsed) = distributeBuyOrderAcrossPriceLevel(
+                (uint256 tokenFilled, uint256 usdcUsed) = distributeBuyOrderAcrossPriceLevel(
                     newOrder,
                     currentPrice,
                     j,
@@ -492,6 +488,14 @@ contract OrderBook is
                     totalWeight,
                     nowTime
                 );
+
+                // Apply fees for the matched tokens
+                (uint256 realTokenAmount, uint256 feeTokenAmount) = getAmountDeductFee(
+                    tokenFilled,
+                    OrderType.BUY
+                );
+                token.safeTransfer(newOrder.trader, realTokenAmount);
+                token.safeTransfer(treasury, feeTokenAmount);
 
                 newOrder.remainUsdcAmount -= usdcUsed;
 
@@ -544,7 +548,7 @@ contract OrderBook is
 
                 // Time-weighted distribution
                 (
-                    ,
+                    uint256 usdcFilled,
                     uint256 tokenAmountUsed
                 ) = distributeSellOrderAcrossPriceLevel(
                         newOrder,
@@ -554,6 +558,14 @@ contract OrderBook is
                         totalWeight,
                         nowTime
                     );
+
+                // Apply fees for the matched USDC
+                (uint256 realUsdcAmount, uint256 feeUsdcAmount) = getAmountDeductFee(
+                    usdcFilled,
+                    OrderType.SELL
+                );
+                usdc.safeTransfer(newOrder.trader, realUsdcAmount);
+                usdc.safeTransfer(treasury, feeUsdcAmount);
 
                 newOrder.remainTokenAmount -= tokenAmountUsed;
 
@@ -620,14 +632,9 @@ contract OrderBook is
                 ].id
             )
         ) {
+            uint256 lastOrderId = activeOrderIds[orderType][activeOrderIds[orderType].length - 1];
             activeOrderIds[orderType].pop();
-            fulfilledOrderIds.push(
-                orders[
-                    activeOrderIds[orderType][
-                        activeOrderIds[orderType].length - 1
-                    ]
-                ].id
-            );
+            fulfilledOrderIds.push(lastOrderId);
         }
     }
 
@@ -666,31 +673,16 @@ contract OrderBook is
         uint256 depth,
         OrderType orderType
     ) external view returns (Order[] memory) {
-        if (orderType == OrderType.BUY) {
-            Order[] memory bestActiveBuyOrders = new Order[](depth);
-            for (
-                uint256 i = activeOrderIds[OrderType.BUY].length - 1;
-                i >= activeOrderIds[OrderType.BUY].length - depth;
-                i--
-            ) {
-                bestActiveBuyOrders[i] = orders[
-                    activeOrderIds[OrderType.BUY][i]
-                ];
-            }
-            return bestActiveBuyOrders;
-        } else {
-            Order[] memory bestActiveSellOrders = new Order[](depth);
-            for (
-                uint256 i = activeOrderIds[OrderType.SELL].length - 1;
-                i >= activeOrderIds[OrderType.SELL].length - depth;
-                i--
-            ) {
-                bestActiveSellOrders[i] = orders[
-                    activeOrderIds[OrderType.SELL][i]
-                ];
-            }
-            return bestActiveSellOrders;
+        uint256[] storage activeIds = activeOrderIds[orderType];
+        uint256 actualDepth = depth > activeIds.length ? activeIds.length : depth;
+        
+        Order[] memory result = new Order[](actualDepth);
+        
+        for (uint256 i = 0; i < actualDepth; i++) {
+            result[i] = orders[activeIds[activeIds.length - 1 - i]];
         }
+        
+        return result;
     }
 
     modifier onlyOrderMaker(uint256 orderId) {
@@ -735,11 +727,6 @@ contract OrderBook is
     function setTreasury(address _treasury) external onlyOwner {
         require(_treasury != address(0), "Invalid address");
         treasury = _treasury;
-    }
-
-    function setOracle(address _oracle) external onlyOwner {
-        require(_oracle != address(0), "Invalid address");
-        priceOracle = IOracle(_oracle);
     }
 
     function getAmountDeductFee(
