@@ -19,7 +19,7 @@ contract OrderBook is
     using SafeERC20 for IERC20;
 
     uint256 private constant BASE_BIPS = 10000;
-    uint256 private constant price_decimals = 18;
+    uint256 private constant TOEKN_DECIMALS = 18;
 
     uint256 public nonce;
     uint256 public buyFeeBips;
@@ -185,12 +185,12 @@ contract OrderBook is
             if (weight == 0) weight = 1;
 
             uint256 usdcShare = (remainUsdcAmount * weight) / remainTotalWeight;
-            uint256 tokenQty = (usdcShare * 10 ** price_decimals) /
+            uint256 tokenQty = (usdcShare * 10 ** TOEKN_DECIMALS) /
                 currentPrice;
 
             if (tokenQty > activeSellOrder.remainTokenAmount) {
                 tokenQty = activeSellOrder.remainTokenAmount;
-                usdcShare = (tokenQty * currentPrice) / 10 ** price_decimals;
+                usdcShare = (tokenQty * currentPrice) / 10 ** TOEKN_DECIMALS;
             }
 
             (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
@@ -250,6 +250,11 @@ contract OrderBook is
         uint256 totalUsdc = 0;
         uint256 nowTime = block.timestamp;
 
+        console.log(
+            "activeOrderIds[BUY]",
+            activeOrderIds[OrderType.BUY].length
+        );
+
         for (
             uint256 i = activeOrderIds[OrderType.BUY].length;
             i > 0 && sellMarketOrder.remainTokenAmount > 0;
@@ -270,6 +275,9 @@ contract OrderBook is
             uint256 start = j;
             uint256 end = i;
 
+            console.log("start, end", start);
+            console.log("start, end", end);
+
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
@@ -282,6 +290,8 @@ contract OrderBook is
                     totalWeight += w;
                 }
             }
+
+            console.log("total weight", totalWeight);
 
             // Apply time-weighted matching
             (
@@ -315,11 +325,14 @@ contract OrderBook is
         fulfilledOrderIds.push(nonce);
         cleanLimitOrders(OrderType.BUY);
 
+        console.log("total usdc", totalUsdc);
+
         // Transfer USDC to seller
         (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
             totalUsdc,
             OrderType.SELL
         );
+        console.log("real amount", realAmount);
         usdc.safeTransfer(sellMarketOrder.trader, realAmount);
         usdc.safeTransfer(treasury, feeAmount);
 
@@ -349,15 +362,22 @@ contract OrderBook is
             if (weight == 0) weight = 1;
 
             uint256 share = (remainTokenAmount * weight) / remainTotalWeight;
+            console.log("share", share);
+            console.log(
+                "activeBuyOrder.remainTokenAmount",
+                activeBuyOrder.remainTokenAmount
+            );
             if (share > activeBuyOrder.remainTokenAmount) {
                 share = activeBuyOrder.remainTokenAmount;
             }
 
-            uint256 usdcAmount = (share * currentPrice) / 10 ** price_decimals;
+            uint256 usdcAmount = (share * currentPrice) / 10 ** TOEKN_DECIMALS;
+
             if (usdcAmount > activeBuyOrder.remainUsdcAmount) {
                 usdcAmount = activeBuyOrder.remainUsdcAmount;
-                share = (usdcAmount * 10 ** price_decimals) / currentPrice;
+                share = (usdcAmount * 10 ** TOEKN_DECIMALS) / currentPrice;
             }
+            console.log("share", share);
 
             (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
                 share,
@@ -384,15 +404,17 @@ contract OrderBook is
      * @dev Create new limit order
      */
     function createLimitOrder(
-        uint256 usdcAmount, // For Buy
         uint256 desiredPrice,
-        uint256 tokenAmount, // For Sell
+        uint256 tokenAmount,
         uint256 validTo,
         OrderType orderType
     ) external nonReentrant {
         require(validTo > block.timestamp, "Invalid time limit");
 
+        uint256 usdcAmount;
         if (orderType == OrderType.BUY) {
+            usdcAmount = (desiredPrice * tokenAmount) / 10 ** TOEKN_DECIMALS;
+            console.log("----------", usdcAmount);
             usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         } else {
             token.safeTransferFrom(msg.sender, address(this), tokenAmount);
@@ -523,6 +545,7 @@ contract OrderBook is
                     j--;
                 }
 
+                // Weight calc
                 uint256 totalWeight = 0;
                 for (uint256 k = j; k < i; k++) {
                     Order memory o = orders[activeOrderIds[OrderType.BUY][k]];
@@ -590,7 +613,7 @@ contract OrderBook is
         uint256 insertPosition = orderIds.length;
 
         if (order.orderType == OrderType.BUY) {
-            // Sort orders in ascending order (lower price first)
+            // For buy orders, find position where price is higher
             for (uint256 i = 0; i < orderIds.length; i++) {
                 if (orders[orderIds[i]].desiredPrice > order.desiredPrice) {
                     insertPosition = i;
@@ -598,7 +621,7 @@ contract OrderBook is
                 }
             }
         } else {
-            // Sort orders in descending order (higher price first)
+            // For sell orders, find position where price is lower
             for (uint256 i = 0; i < orderIds.length; i++) {
                 if (orders[orderIds[i]].desiredPrice < order.desiredPrice) {
                     insertPosition = i;
@@ -688,8 +711,16 @@ contract OrderBook is
 
         Order[] memory result = new Order[](actualDepth);
 
-        for (uint256 i = 0; i < actualDepth; i++) {
-            result[i] = orders[activeIds[activeIds.length - 1 - i]];
+        if (orderType == OrderType.BUY) {
+            // For buy orders, return in ascending order (lowest price first)
+            for (uint256 i = 0; i < actualDepth; i++) {
+                result[i] = orders[activeIds[i]];
+            }
+        } else {
+            // For sell orders, return in descending order (highest price first)
+            for (uint256 i = 0; i < actualDepth; i++) {
+                result[i] = orders[activeIds[activeIds.length - 1 - i]];
+            }
         }
 
         return result;
