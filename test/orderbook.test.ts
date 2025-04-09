@@ -227,4 +227,108 @@ describe("Order book test", () => {
       expect(order.isFilled).to.be.true;
     });
   });
+
+  describe("OrderBook - Fee and Treasury functionality", () => {
+    it("should collect fees on buy market orders", async () => {
+      const { orderBook, usdc, token, user1, treasury } = await loadFixture(basicFixture);
+      const block = await ethers.provider.getBlock("latest");
+
+      // Create a sell order
+      await orderBook.connect(user1).createLimitOrder(
+        parseUnits("0.01", 6),
+        parseUnits("100", 18),
+        block.timestamp + 3600,
+        OrderType.SELL
+      );
+
+      const beforeTreasury = await token.balanceOf(treasury.address);
+      const beforeUser = await token.balanceOf(user1.address);
+
+      // Execute buy market order
+      await orderBook.createBuyMarketOrder(parseUnits("1", 6));
+
+      const afterTreasury = await token.balanceOf(treasury.address);
+      const afterUser = await token.balanceOf(user1.address);
+
+      // Treasury should receive fees
+      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
+      // User should receive less than full amount due to fees
+      expect(afterUser.sub(beforeUser)).to.be.lt(parseUnits("100", 18));
+    });
+
+    it("should collect fees on sell market orders", async () => {
+      const { orderBook, usdc, token, user1, treasury } = await loadFixture(basicFixture);
+      const block = await ethers.provider.getBlock("latest");
+
+      // Create a buy order
+      await orderBook.connect(user1).createLimitOrder(
+        parseUnits("0.01", 6),
+        parseUnits("100", 18),
+        block.timestamp + 3600,
+        OrderType.BUY
+      );
+
+      const beforeTreasury = await usdc.balanceOf(treasury.address);
+      const beforeUser = await usdc.balanceOf(user1.address);
+
+      // Execute sell market order
+      await orderBook.createSellMarketOrder(parseUnits("100", 18));
+
+      const afterTreasury = await usdc.balanceOf(treasury.address);
+      const afterUser = await usdc.balanceOf(user1.address);
+
+      // Treasury should receive fees
+      expect(afterTreasury.sub(beforeTreasury)).to.be.gt(0);
+      // User should receive less than full amount due to fees
+      expect(afterUser.sub(beforeUser)).to.be.lt(parseUnits("1", 6));
+    });
+
+    it("should allow owner to update fee rates", async () => {
+      const { orderBook, owner } = await loadFixture(basicFixture);
+
+      // Update buy fee
+      await orderBook.connect(owner).setbuyFeeBips(1000);
+      expect(await orderBook.buyFeeBips()).to.equal(1000);
+
+      // Update sell fee
+      await orderBook.connect(owner).setsellFeeBips(1000);
+      expect(await orderBook.sellFeeBips()).to.equal(1000);
+
+      // Should fail if fee is too high
+      await expect(orderBook.connect(owner).setbuyFeeBips(10001)).to.be.revertedWith("Invalid buyFeeBips");
+      await expect(orderBook.connect(owner).setsellFeeBips(10001)).to.be.revertedWith("Invalid sellFeeBips");
+    });
+
+    it("should allow owner to update treasury address", async () => {
+      const { orderBook, owner, user1 } = await loadFixture(basicFixture);
+
+      await orderBook.connect(owner).setTreasury(user1.address);
+      expect(await orderBook.treasury()).to.equal(user1.address);
+
+      // Should fail if address is zero
+      await expect(orderBook.connect(owner).setTreasury(ethers.constants.AddressZero)).to.be.revertedWith("Invalid address");
+    });
+  });
+
+  describe("OrderBook - Oracle functionality", () => {
+    it("should get latest rate from oracle", async () => {
+      const { orderBook, oracle } = await loadFixture(basicFixture);
+
+      const [bestBidOrder, bestAskOrder] = await orderBook.getLatestRate();
+      
+      // Oracle should return valid price
+      expect(bestBidOrder.price).to.be.gt(0);
+      expect(bestAskOrder.price).to.be.gt(0);
+    });
+
+    it("should allow owner to update oracle address", async () => {
+      const { orderBook, owner, user1 } = await loadFixture(basicFixture);
+
+      await orderBook.connect(owner).setOracle(user1.address);
+      expect(await orderBook.priceOracle()).to.equal(user1.address);
+
+      // Should fail if address is zero
+      await expect(orderBook.connect(owner).setOracle(ethers.constants.AddressZero)).to.be.revertedWith("Invalid address");
+    });
+  });
 });

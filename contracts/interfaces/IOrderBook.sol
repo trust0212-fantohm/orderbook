@@ -25,32 +25,5 @@ interface IOrderBook {
         uint256 createdAt;
     }
 
-    struct RecentOrder {
-        uint256 dollars;
-        uint256 usdcAmount;
-        uint256 tokenAmount;
-    }
-
-    event TradeExecuted(
-        uint256 indexed buyOrderId,
-        uint256 indexed sellOrderId,
-        address indexed buyer,
-        address seller,
-        uint256 price,
-        uint256 tokenAmount
-    );
-
-    event OrderReverted(uint256 indexed orderId, address indexed trader);
-
-    event OrderCreated(
-        uint256 indexed orderId,
-        address indexed trader,
-        OrderType orderType,
-        uint256 desiredPrice,
-        uint256 tokenAmount,
-        uint256 timeInForce,
-        bool isMarket
-    );
-
     event OrderCanceled(uint256 indexed orderId, uint256 cancleTime);
 }
