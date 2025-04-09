@@ -8,7 +8,6 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IOrderBook} from "./interfaces/IOrderBook.sol";
-import "hardhat/console.sol";
 
 contract OrderBook is
     Initializable,
@@ -250,11 +249,6 @@ contract OrderBook is
         uint256 totalUsdc = 0;
         uint256 nowTime = block.timestamp;
 
-        console.log(
-            "activeOrderIds[BUY]",
-            activeOrderIds[OrderType.BUY].length
-        );
-
         for (
             uint256 i = activeOrderIds[OrderType.BUY].length;
             i > 0 && sellMarketOrder.remainTokenAmount > 0;
@@ -275,9 +269,6 @@ contract OrderBook is
             uint256 start = j;
             uint256 end = i;
 
-            console.log("start, end", start);
-            console.log("start, end", end);
-
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
@@ -290,8 +281,6 @@ contract OrderBook is
                     totalWeight += w;
                 }
             }
-
-            console.log("total weight", totalWeight);
 
             // Apply time-weighted matching
             (
@@ -325,14 +314,11 @@ contract OrderBook is
         fulfilledOrderIds.push(nonce);
         cleanLimitOrders(OrderType.BUY);
 
-        console.log("total usdc", totalUsdc);
-
         // Transfer USDC to seller
         (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
             totalUsdc,
             OrderType.SELL
         );
-        console.log("real amount", realAmount);
         usdc.safeTransfer(sellMarketOrder.trader, realAmount);
         usdc.safeTransfer(treasury, feeAmount);
 
@@ -362,11 +348,7 @@ contract OrderBook is
             if (weight == 0) weight = 1;
 
             uint256 share = (remainTokenAmount * weight) / remainTotalWeight;
-            console.log("share", share);
-            console.log(
-                "activeBuyOrder.remainTokenAmount",
-                activeBuyOrder.remainTokenAmount
-            );
+
             if (share > activeBuyOrder.remainTokenAmount) {
                 share = activeBuyOrder.remainTokenAmount;
             }
@@ -377,7 +359,6 @@ contract OrderBook is
                 usdcAmount = activeBuyOrder.remainUsdcAmount;
                 share = (usdcAmount * 10 ** TOEKN_DECIMALS) / currentPrice;
             }
-            console.log("share", share);
 
             (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
                 share,
@@ -389,7 +370,7 @@ contract OrderBook is
             activeBuyOrder.remainUsdcAmount -= usdcAmount;
             activeBuyOrder.lastTradeTimestamp = block.timestamp;
 
-            if (activeBuyOrder.remainTokenAmount == 0) {
+            if (activeBuyOrder.remainUsdcAmount == 0) {
                 activeBuyOrder.isFilled = true;
             }
 
@@ -414,7 +395,6 @@ contract OrderBook is
         uint256 usdcAmount;
         if (orderType == OrderType.BUY) {
             usdcAmount = (desiredPrice * tokenAmount) / 10 ** TOEKN_DECIMALS;
-            console.log("----------", usdcAmount);
             usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         } else {
             token.safeTransferFrom(msg.sender, address(this), tokenAmount);
@@ -512,6 +492,7 @@ contract OrderBook is
             // If partially filled, insert the rest
             if (newOrder.remainUsdcAmount > 0) {
                 insertLimitOrder(newOrder.id);
+                orders[nonce] = newOrder; // Update the order state
             } else {
                 newOrder.isFilled = true;
                 orders[nonce] = newOrder;
@@ -585,6 +566,7 @@ contract OrderBook is
             // If partially filled, insert the rest
             if (newOrder.remainTokenAmount > 0) {
                 insertLimitOrder(newOrder.id);
+                orders[nonce] = newOrder; // Update the order state
             } else {
                 newOrder.isFilled = true;
                 orders[nonce] = newOrder;
