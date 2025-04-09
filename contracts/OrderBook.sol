@@ -18,23 +18,22 @@ contract OrderBook is
 {
     using SafeERC20 for IERC20;
 
-    uint256[] public fulfilledOrderIds;
-
-    IERC20 public usdc;
-    IERC20 public token;
-
     uint256 private constant BASE_BIPS = 10000;
     uint256 private constant price_decimals = 18;
 
     uint256 public nonce;
     uint256 public buyFeeBips;
     uint256 public sellFeeBips;
+    uint256[] public fulfilledOrderIds;
 
     address public treasury;
 
     mapping(OrderType => uint256[]) public activeOrderIds; // Tracks active order IDs by type
     mapping(uint256 => Order) public orders; // Maps order ID to Order struct
     mapping(address => uint256[]) public orderIdsByUser; // Tracks order IDs by user
+
+    IERC20 public usdc;
+    IERC20 public token;
 
     function initialize(
         address _usdcAddress,
@@ -141,6 +140,7 @@ contract OrderBook is
 
         if (buyMarketOrder.remainUsdcAmount > 0) {
             // revert("Insufficient Token Supply");
+
             // If there are still USDC left, refund it back to the trader
             usdc.safeTransfer(
                 buyMarketOrder.trader,
@@ -414,8 +414,6 @@ contract OrderBook is
             lastTradeTimestamp: 0,
             createdAt: block.timestamp
         });
-
-        console.log("newOrder", newOrder.trader);
 
         orders[nonce] = newOrder;
         orderIdsByUser[msg.sender].push(nonce);

@@ -14,7 +14,7 @@ describe("OrderBook", function () {
 
   const USDC_DECIMALS = 6;
   const TOKEN_DECIMALS = 18;
-  const PRICE_DECIMALS = 6;
+  const PRICE_DECIMALS = 18;
 
   beforeEach(async function () {
     [owner, trader1, trader2, treasury] = await ethers.getSigners();
@@ -80,6 +80,72 @@ describe("OrderBook", function () {
       expect(trader2UsdcBalanceAfter).to.be.lt(trader2UsdcBalanceBefore);
     });
 
+    it("should distribute orders based on time when multiple orders exist at same price", async function () {
+      // Create multiple sell limit orders at the same price
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
+      // First order (oldest)
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        0,
+        price,
+        tokenAmount,
+        validTo,
+        1
+      );
+
+      // Wait for 1 second to create time difference
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Second order (middle)
+      await token.connect(trader2).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader2).createLimitOrder(
+        0,
+        price,
+        tokenAmount,
+        validTo,
+        1
+      );
+
+      // Wait for 1 second to create time difference
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Third order (newest)
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        0,
+        price,
+        tokenAmount,
+        validTo,
+        1
+      );
+
+      // Create a large buy market order that will match with all three sell orders
+      const usdcAmount = ethers.utils.parseUnits("300", USDC_DECIMALS);
+      await usdc.connect(trader2).approve(orderBook.address, usdcAmount);
+
+      // Get initial balances
+      const trader1InitialBalance = await usdc.balanceOf(trader1.address);
+      const trader2InitialBalance = await usdc.balanceOf(trader2.address);
+
+      // Execute buy market order
+      await orderBook.connect(trader2).createBuyMarketOrder(usdcAmount);
+
+      // Get final balances
+      const trader1FinalBalance = await usdc.balanceOf(trader1.address);
+      const trader2FinalBalance = await usdc.balanceOf(trader2.address);
+
+      // Calculate received amounts
+      const trader1Received = trader1FinalBalance.sub(trader1InitialBalance);
+      const trader2Received = trader2FinalBalance.sub(trader2InitialBalance);
+
+      // Since trader1 has two orders (oldest and newest) and trader2 has one (middle),
+      // and the distribution is time-weighted, trader1 should receive more USDC than trader2
+      expect(trader1Received).to.be.gt(trader2Received);
+    });
+
     it("should revert if no active sell orders", async function () {
       const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
       await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
@@ -122,6 +188,72 @@ describe("OrderBook", function () {
       expect(trader2TokenBalanceAfter).to.be.lt(trader2TokenBalanceBefore);
     });
 
+    it("should distribute sell market orders based on time when multiple buy orders exist at same price", async function () {
+      // Create multiple buy limit orders at the same price
+      const usdcAmount = ethers.utils.parseUnits("100", USDC_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
+      // First order (oldest)
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
+      );
+
+      // Wait for 1 second to create time difference
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Second order (middle)
+      await usdc.connect(trader2).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader2).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
+      );
+
+      // Wait for 1 second to create time difference
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Third order (newest)
+      await usdc.connect(trader1).approve(orderBook.address, usdcAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
+      );
+
+      // Create a large sell market order that will match with all three buy orders
+      const tokenAmount = ethers.utils.parseUnits("300", TOKEN_DECIMALS);
+      await token.connect(trader2).approve(orderBook.address, tokenAmount);
+
+      // Get initial balances
+      const trader1InitialBalance = await token.balanceOf(trader1.address);
+      const trader2InitialBalance = await token.balanceOf(trader2.address);
+
+      // Execute sell market order
+      await orderBook.connect(trader2).createSellMarketOrder(tokenAmount);
+
+      // Get final balances
+      const trader1FinalBalance = await token.balanceOf(trader1.address);
+      const trader2FinalBalance = await token.balanceOf(trader2.address);
+
+      // Calculate received amounts
+      const trader1Received = trader1FinalBalance.sub(trader1InitialBalance);
+      const trader2Received = trader2FinalBalance.sub(trader2InitialBalance);
+
+      // Since trader1 has two orders (oldest and newest) and trader2 has one (middle),
+      // and the distribution is time-weighted, trader1 should receive more tokens than trader2
+      expect(trader1Received).to.be.gt(trader2Received);
+    });
+
     it("should revert if no active buy orders", async function () {
       const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
       await token.connect(trader1).approve(orderBook.address, tokenAmount);
@@ -153,6 +285,78 @@ describe("OrderBook", function () {
       expect(order.orderType).to.equal(0); // OrderType.BUY
       expect(order.desiredPrice).to.equal(price);
       expect(order.usdcAmount).to.equal(usdcAmount);
+    });
+
+    it("should distribute limit orders based on time when matching with multiple orders at same price", async function () {
+      // Create multiple sell limit orders at the same price
+      const tokenAmount = ethers.utils.parseUnits("100", TOKEN_DECIMALS);
+      const price = ethers.utils.parseUnits("1", PRICE_DECIMALS);
+      const validTo = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+
+      // First sell order (oldest)
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        0,
+        price,
+        tokenAmount,
+        validTo,
+        1
+      );
+
+      // Wait for 1 second to create time difference
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Second sell order (middle)
+      await token.connect(trader2).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader2).createLimitOrder(
+        0,
+        price,
+        tokenAmount,
+        validTo,
+        1
+      );
+
+      // Wait for 1 second to create time difference
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Third sell order (newest)
+      await token.connect(trader1).approve(orderBook.address, tokenAmount);
+      await orderBook.connect(trader1).createLimitOrder(
+        0,
+        price,
+        tokenAmount,
+        validTo,
+        1
+      );
+
+      // Create a large buy limit order that will match with all three sell orders
+      const usdcAmount = ethers.utils.parseUnits("300", USDC_DECIMALS);
+      await usdc.connect(trader2).approve(orderBook.address, usdcAmount);
+
+      // Get initial balances
+      const trader1InitialBalance = await usdc.balanceOf(trader1.address);
+      const trader2InitialBalance = await usdc.balanceOf(trader2.address);
+
+      // Execute buy limit order
+      await orderBook.connect(trader2).createLimitOrder(
+        usdcAmount,
+        price,
+        0,
+        validTo,
+        0
+      );
+
+      // Get final balances
+      const trader1FinalBalance = await usdc.balanceOf(trader1.address);
+      const trader2FinalBalance = await usdc.balanceOf(trader2.address);
+
+      // Calculate received amounts
+      const trader1Received = trader1FinalBalance.sub(trader1InitialBalance);
+      const trader2Received = trader2FinalBalance.sub(trader2InitialBalance);
+
+      // Since trader1 has two sell orders (oldest and newest) and trader2 has one (middle),
+      // and the distribution is time-weighted, trader1 should receive more USDC than trader2
+      expect(trader1Received).to.be.gt(trader2Received);
     });
 
     it("should create sell limit order successfully", async function () {
