@@ -585,12 +585,6 @@ contract OrderBook is
 
         uint256[] storage orderIds = activeOrderIds[order.orderType];
 
-        // Initialize array if empty
-        if (orderIds.length == 0) {
-            orderIds.push(orderId);
-            return;
-        }
-
         // Find the correct position to insert
         uint256 insertPosition = orderIds.length;
 
